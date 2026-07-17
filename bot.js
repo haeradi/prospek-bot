@@ -361,7 +361,7 @@ const createProspek = async (data) => {
     testRidePreference: false,
     tagPriority: true,
     preferenceSalesType: 'CREDIT',
-    prospectStatus: isLOW ? 'LOW' : 'PROSPECT',
+    prospectStatus: 'PROSPECT', // Always create as PROSPECT, upgrade via follow-up for all levels
     channelId: jwtChannelId(),
     channelName: jwtChannelName(),
     // Occupation (teks biasa, tidak perlu UUID)
@@ -564,7 +564,7 @@ bot.on('callback_query', async (q) => {
           testRidePreference: false,
           tagPriority: true,
           preferenceSalesType: d.statusKredit === 'KREDIT' ? 'CREDIT' : undefined,
-          prospectStatus: isLOW ? 'LOW' : 'PROSPECT',
+          prospectStatus: 'PROSPECT', // Create as PROSPECT, upgrade via follow-up for all levels
           channelId: jwtChannelId(),
           channelName: jwtChannelName(),
           occupation: d.pekerjaan,
