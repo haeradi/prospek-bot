@@ -1,0 +1,15 @@
+[Unit]
+Description=Prospek Bot — Telegram bot input prospek Star API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/node /home/ubuntu/prospek-bot/bot.js
+WorkingDirectory=/home/ubuntu/prospek-bot
+Restart=always
+RestartSec=10
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=default.target
