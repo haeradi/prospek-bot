@@ -907,6 +907,8 @@ bot.on('document', async (msg) => {
     
     const isExcel = fileName.match(/\.(xlsx|xls)$/i);
     let lines = [];
+    let detectedLevel = 'MEDIUM';
+    let levelEmoji = '🟡';
     
     if (isExcel) {
       // Parse Excel binary file using XLSX library
@@ -977,8 +979,8 @@ bot.on('document', async (msg) => {
       // MEDIUM = punya alamat/provinsi/motor dll
       const hasMediumCols = colMap.alamat >= 0 || colMap.provinsi >= 0 || colMap.kota >= 0 
                          || colMap.kecamatan >= 0 || colMap.rt >= 0 || colMap.motor >= 0;
-      const detectedLevel = hasMediumCols ? 'MEDIUM' : 'LOW';
-      const levelEmoji = detectedLevel === 'LOW' ? '🟢' : '🟡';
+      detectedLevel = hasMediumCols ? 'MEDIUM' : 'LOW';
+      levelEmoji = detectedLevel === 'LOW' ? '🟢' : '🟡';
       
       // Build text lines from Excel rows — now uses PIPE format
       for (let R = range.s.r + 1; R <= range.e.r; R++) {
