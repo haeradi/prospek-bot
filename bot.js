@@ -243,9 +243,9 @@ const parseIndividuLine = (line) => {
   
   // Pipe format field mapping:
   // 0=no, 1=nama, 2=alamat, 3=provinsi, 4=kabupaten, 5=kecamatan, 6=desa, 7=rt, 8=rw,
-  // 9=gender, 10=agama, 11=pekerjaan, 12=hp, 13=status, 14=bayar, 15=kodeMotor
+  // 9=gender, 10=agama, 11=pekerjaan, 12=hp, 13=status, 14=bayar, 15=kodeMotor, 16=nik
   
-  let noUrut, nama, gender, alamat, rt, rw, provinsi, kabupaten, kecamatan, desa, agama, pekerjaan, hp, statusKredit, kodeMotor;
+  let noUrut, nama, gender, alamat, rt, rw, provinsi, kabupaten, kecamatan, desa, agama, pekerjaan, hp, statusKredit, kodeMotor, nik;
   
   if (usePipe) {
     // Skip empty first element if parts[0] is empty (case: "individu|3|...")
@@ -265,6 +265,7 @@ const parseIndividuLine = (line) => {
     hp        = normalizeHP(parts[offset + 12] || '');
     statusKredit = parts[offset + 13] || 'tidak';
     kodeMotor = (parts[offset + 15] || parts[offset + 14] || '').toUpperCase().trim();
+    nik       = (parts[offset + 16] || '').replace(/[^0-9]/g, '');
   } else {
     // Space format parser (existing logic)
     let idx = 0;
@@ -337,6 +338,7 @@ const parseIndividuLine = (line) => {
       hp,
       statusKredit: statusKredit.includes('kredit') ? 'kredit' : 'tunai',
       motor,
+      nik: nik || null,
       // Extra fields for pipe format
       ...(usePipe ? { provinsi, kabupaten, kecamatan, desa } : {}),
     },
@@ -554,6 +556,7 @@ bot.on('callback_query', async (q) => {
 
         const currentLevel = s.ff_level || 'MEDIUM';
         const isLOW = currentLevel === 'LOW';
+        const isHOT = currentLevel === 'HOT';
 
         // HP belum ada — create baru
         const body = {
@@ -589,6 +592,11 @@ bot.on('callback_query', async (q) => {
           body.address = `${d.alamat}`;
         }
 
+        // NIK only for HOT
+        if (isHOT && d.nik && d.nik.length === 16) {
+          body.iDNumber = d.nik;
+        }
+
         // Asal Prospek (dari no urut: 1, 2, 3, 4, 5a, 5b, 6, 9a...)
         const asalKey = (d.no || '').toLowerCase().trim();
         const asalData = ASAL_PROSPEK[asalKey];
@@ -613,16 +621,22 @@ bot.on('callback_query', async (q) => {
         const prospect = result.ensureCreateCustomerProspectFromCustomers;
 
         // Follow-up — WAJIB untuk semua level agar muncul di /follup
-        // LOW = "Kontak awal", MEDIUM/HOT = upgrade ke level terkait
         try {
+          let followUpResult = currentLevel;
+          let followUpDesc = 'FF/Excel - Minat motor, follow-up lanjut';
+          if (isLOW) {
+            followUpResult = 'LOW';
+            followUpDesc = 'FF/Excel LOW - Kontak awal follow-up';
+          } else if (isHOT) {
+            followUpResult = 'HOT';
+            followUpDesc = 'FF/Excel HOT - NIK lengkap, ready follow-up';
+          }
           await callStar(MUT_FOLLOWUP, {
             input: {
               customerProspectId: prospect.id,
               followUpMethod: 'WA',
-              followUpResult: isLOW ? 'LOW' : currentLevel,
-              description: isLOW
-                ? 'FF/Excel LOW - Kontak awal follow-up'
-                : 'FF/Excel - Minat motor, follow-up lanjut',
+              followUpResult,
+              description: followUpDesc,
               followUpDate: new Date().toISOString(),
             }
           });
@@ -641,7 +655,7 @@ bot.on('callback_query', async (q) => {
     // Build result message — limit each section to avoid Telegram 4096 char limit
     const MAX_SUCC_DETAIL = 10;
     const MAX_FAIL_DETAIL = 5;
-    const levelEmoji = s.ff_level === 'LOW' ? '🟢' : '🟡';
+    const levelEmoji = s.ff_level === 'LOW' ? '🟢' : s.ff_level === 'HOT' ? '🔴' : '🟡';
     let resultTxt = `📊 *Hasil FF/Excel*   ${levelEmoji} ${s.ff_level || 'MEDIUM'}\n\n`;
     
     if (success.length > 0) {
@@ -988,14 +1002,26 @@ bot.on('document', async (msg) => {
         tesRide: idx('preferensitesride'),
         payment: idx('prefrensipembelian'),
         motor: idx('tipemotor'),
+        nik: idx('nik') >= 0 ? idx('nik') : idx('nomornik'),
       };
       
-      // Detect level from columns: LOW = hanya 5 kolom dasar (jenis, kodeAsal, nama, gender, hp)
-      // MEDIUM = punya alamat/provinsi/motor dll
-      const hasMediumCols = colMap.alamat >= 0 || colMap.provinsi >= 0 || colMap.kota >= 0 
+      // Detect level from columns:
+      // HOT = punya NIK (16 digit)
+      // MEDIUM = punya alamat/provinsi/motor (tanpa NIK)
+      // LOW = hanya kolom dasar (jenis, kodeAsal, nama, gender, hp)
+      const hasNik = colMap.nik >= 0;
+      const hasMediumCols = colMap.alamat >= 0 || colMap.provinsi >= 0 || colMap.kota >= 0
                          || colMap.kecamatan >= 0 || colMap.rt >= 0 || colMap.motor >= 0;
-      detectedLevel = hasMediumCols ? 'MEDIUM' : 'LOW';
-      levelEmoji = detectedLevel === 'LOW' ? '🟢' : '🟡';
+      if (hasNik) {
+        detectedLevel = 'HOT';
+        levelEmoji = '🔴';
+      } else if (hasMediumCols) {
+        detectedLevel = 'MEDIUM';
+        levelEmoji = '🟡';
+      } else {
+        detectedLevel = 'LOW';
+        levelEmoji = '🟢';
+      }
       
       // Build text lines from Excel rows — now uses PIPE format
       for (let R = range.s.r + 1; R <= range.e.r; R++) {
@@ -1022,27 +1048,33 @@ bot.on('document', async (msg) => {
           const rtVal = rtMatch ? String(rtMatch[1]) : (rtFromCol ? String(rtFromCol) : '1');
           const rwVal = rwMatch ? String(rwMatch[1]) : (rwFromCol ? String(rwFromCol) : '0');
 
-          // Pipe-separated output — matches pipe parser format
-          const pipeParts = [];
-          pipeParts.push(row.jenis);                     // individu
-          pipeParts.push(row.kodeAsal || '3');            // NO (kode asal)
-          pipeParts.push(row.nama || '');                 // NAMA
-          pipeParts.push(row.alamat || '');               // ALAMAT
-          pipeParts.push(row.provinsi || 'KALIMANTAN TIMUR'); // PROVINSI
-          pipeParts.push(row.kota || '');                 // KABUPATEN
-          pipeParts.push(row.kecamatan || 'PENAJAM');     // KECAMATAN
-          pipeParts.push(row.kelurahan || 'PENAJAM');     // DESA
-          pipeParts.push(rtVal);                          // RT
-          pipeParts.push(rwVal);                          // RW
-          pipeParts.push(row.gender || 'LAKI-LAKI');      // GENDER
-          pipeParts.push(row.agama || 'ISLAM');           // AGAMA
-          pipeParts.push(row.pekerjaan || 'LAIN-LAIN');   // PEKERJAAN
-          pipeParts.push(row.hp || '');                   // HP
-          pipeParts.push(row.tesRide || 'tidak');         // STATUS
-          pipeParts.push(row.payment || 'tunai');         // BAYAR
-          pipeParts.push(row.motor || '');                // KODE MOTOR
-          
-          lines.push(pipeParts.join('|'));
+          // Detect HOT format: has NIK column between kodeAsal and nama
+        const isHotFormat = colMap.nik >= 0;
+        
+        // Pipe-separated output — adapts to HOT format if NIK present
+        // HOT: jenis|no|nama|alamat|prov|kota|kecamatan|desa|rt|rw|gender|agama|pekerjaan|hp|status|bayar|motor|nik
+        // MEDIUM: jenis|no|nama|alamat|prov|kota|kecamatan|desa|rt|rw|gender|agama|pekerjaan|hp|status|bayar|motor
+        const pipeParts = [];
+        pipeParts.push(row.jenis);                          // 0: individu
+        pipeParts.push(row.kodeAsal || '3');                 // 1: no/kode asal
+        pipeParts.push(row.nama || '');                      // 2: NAMA (index shifts in HOT format)
+        pipeParts.push(row.alamat || '');                    // 3: ALAMAT
+        pipeParts.push(row.provinsi || 'KALIMANTAN TIMUR');  // 4: PROVINSI
+        pipeParts.push(row.kota || '');                      // 5: KABUPATEN
+        pipeParts.push(row.kecamatan || 'PENAJAM');          // 6: KECAMATAN
+        pipeParts.push(row.kelurahan || 'PENAJAM');          // 7: DESA
+        pipeParts.push(rtVal);                               // 8: RT
+        pipeParts.push(rwVal);                               // 9: RW
+        pipeParts.push(row.gender || 'LAKI-LAKI');           // 10: GENDER
+        pipeParts.push(row.agama || 'ISLAM');                // 11: AGAMA
+        pipeParts.push(row.pekerjaan || 'LAIN-LAIN');        // 12: PEKERJAAN
+        pipeParts.push(row.hp || '');                        // 13: HP
+        pipeParts.push(row.tesRide || 'tidak');              // 14: STATUS
+        pipeParts.push(row.payment || 'tunai');              // 15: BAYAR
+        pipeParts.push(row.motor || '');                     // 16: KODE MOTOR
+        pipeParts.push(row.nik || '');                       // 17: NIK (HOT format)
+        
+        lines.push(pipeParts.join('|'));
         }
       }
     } else {
