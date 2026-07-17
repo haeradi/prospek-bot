@@ -352,6 +352,7 @@ const normalizeHP = (hp) => {
 
 // ====== CREATE PROSPEK ======
 const createProspek = async (data) => {
+  const isLOW = data.level === 'LOW';
   const body = {
     name: data.name,
     mobilePhoneNumber: data.phone,
@@ -360,27 +361,30 @@ const createProspek = async (data) => {
     testRidePreference: false,
     tagPriority: true,
     preferenceSalesType: 'CREDIT',
-    prospectStatus: 'PROSPECT', // Akan di-upgrade via follow-up untuk MEDIUM/HOT
+    prospectStatus: isLOW ? 'LOW' : 'PROSPECT',
     channelId: jwtChannelId(),
     channelName: jwtChannelName(),
-    // WILAYAH UUID (WAJIB untuk provinceName/districtName/subDistrictName terisi)
-    provinceId: WILAYAH.provinceId,
-    provinceName: WILAYAH.provinceName,
-    districtId: WILAYAH.districtId,
-    districtName: WILAYAH.districtName,
-    subDistrictId: WILAYAH.subDistrictId,
-    subDistrictName: WILAYAH.subDistrictName,
-    villageId: WILAYAH.villageId,
-    villageName: WILAYAH.villageName,
-    postalCode: WILAYAH.postalCode,
-    rT: data.rt || '001',
-    rW: data.rw || '001',
-    address: data.address || 'PENAJAM',
     // Occupation (teks biasa, tidak perlu UUID)
     occupation: data.occupation || 'Wiraswasta',
     religion: 'ISLAM',
     birthPlace: 'PENAJAM',
   };
+  
+  // WILAYAH fields only for MEDIUM/HOT — LOW tidak perlu alamat/provinsi/dsb
+  if (!isLOW) {
+    body.provinceId = WILAYAH.provinceId;
+    body.provinceName = WILAYAH.provinceName;
+    body.districtId = WILAYAH.districtId;
+    body.districtName = WILAYAH.districtName;
+    body.subDistrictId = WILAYAH.subDistrictId;
+    body.subDistrictName = WILAYAH.subDistrictName;
+    body.villageId = WILAYAH.villageId;
+    body.villageName = WILAYAH.villageName;
+    body.postalCode = WILAYAH.postalCode;
+    body.rT = data.rt || '001';
+    body.rW = data.rw || '001';
+    body.address = data.address || 'PENAJAM';
+  }
   
   // Optional fields
   if (data.motorType) {
@@ -410,7 +414,7 @@ const createProspek = async (data) => {
   const prospect = result.ensureCreateCustomerProspectFromCustomers;
   
   // Auto update status untuk MEDIUM/HOT via ensureUpdateCustomerProspectStatusFromCustomers
-  if (data.level === 'MEDIUM' || data.level === 'HOT') {
+  if (!isLOW) {
     const statusLevel = data.level; // 'MEDIUM' or 'HOT'
     try {
       await callStar(MUT_UPDATE_STATUS, {
@@ -548,6 +552,9 @@ bot.on('callback_query', async (q) => {
           continue;
         }
 
+        const currentLevel = s.ff_level || 'MEDIUM';
+        const isLOW = currentLevel === 'LOW';
+
         // HP belum ada — create baru
         const body = {
           name: d.nama,
@@ -556,28 +563,32 @@ bot.on('callback_query', async (q) => {
           gender: d.gender,
           testRidePreference: false,
           tagPriority: true,
-          preferenceSalesType: d.statusKredit === 'KREDIT' ? 'CREDIT' : undefined, // CASH not valid enum — omit it
-          prospectStatus: 'PROSPECT', // Create as PROSPECT, upgrade via follow-up
+          preferenceSalesType: d.statusKredit === 'KREDIT' ? 'CREDIT' : undefined,
+          prospectStatus: isLOW ? 'LOW' : 'PROSPECT',
           channelId: jwtChannelId(),
           channelName: jwtChannelName(),
-          provinceId: WILAYAH.provinceId,
-          provinceName: WILAYAH.provinceName,
-          districtId: WILAYAH.districtId,
-          districtName: WILAYAH.districtName,
-          subDistrictId: WILAYAH.subDistrictId,
-          subDistrictName: WILAYAH.subDistrictName,
-          villageId: WILAYAH.villageId,
-          villageName: WILAYAH.villageName,
-          postalCode: WILAYAH.postalCode,
-          rT: d.rt,
-          rW: d.rw,
-          address: `${d.alamat}`,
           occupation: d.pekerjaan,
           religion: d.agama,
           birthPlace: 'PENAJAM',
           description: `FF/Excel - No.Urut: ${d.no}`,
         };
-        
+
+        // WILAYAH only for MEDIUM/HOT — LOW tidak perlu alamat/provinsi/dsb
+        if (!isLOW) {
+          body.provinceId = WILAYAH.provinceId;
+          body.provinceName = WILAYAH.provinceName;
+          body.districtId = WILAYAH.districtId;
+          body.districtName = WILAYAH.districtName;
+          body.subDistrictId = WILAYAH.subDistrictId;
+          body.subDistrictName = WILAYAH.subDistrictName;
+          body.villageId = WILAYAH.villageId;
+          body.villageName = WILAYAH.villageName;
+          body.postalCode = WILAYAH.postalCode;
+          body.rT = d.rt;
+          body.rW = d.rw;
+          body.address = `${d.alamat}`;
+        }
+
         // Asal Prospek (dari no urut: 1, 2, 3, 4, 5a, 5b, 6, 9a...)
         const asalKey = (d.no || '').toLowerCase().trim();
         const asalData = ASAL_PROSPEK[asalKey];
@@ -601,22 +612,22 @@ bot.on('callback_query', async (q) => {
         const result = await callStar(MUT_CREATE, { data: body });
         const prospect = result.ensureCreateCustomerProspectFromCustomers;
 
-        // Follow-up jika MEDIUM, biarkan PROSPECT jika LOW
-        const currentLevel = s.ff_level || 'MEDIUM';
-        if (currentLevel !== 'LOW') {
-          try {
-            await callStar(MUT_FOLLOWUP, {
-              input: {
-                customerProspectId: prospect.id,
-                followUpMethod: 'WA',
-                followUpResult: 'MEDIUM',
-                description: 'FF/Excel - Minat motor, follow-up lanjut',
-                followUpDate: new Date().toISOString(),
-              }
-            });
-          } catch (e) {
-            console.log('Follow-up skip:', e.message);
-          }
+        // Follow-up — WAJIB untuk semua level agar muncul di /follup
+        // LOW = "Kontak awal", MEDIUM/HOT = upgrade ke level terkait
+        try {
+          await callStar(MUT_FOLLOWUP, {
+            input: {
+              customerProspectId: prospect.id,
+              followUpMethod: 'WA',
+              followUpResult: isLOW ? 'LOW' : currentLevel,
+              description: isLOW
+                ? 'FF/Excel LOW - Kontak awal follow-up'
+                : 'FF/Excel - Minat motor, follow-up lanjut',
+              followUpDate: new Date().toISOString(),
+            }
+          });
+        } catch (e) {
+          console.log('Follow-up skip:', e.message);
         }
 
         success.push({ nama: d.nama, prospectNumber: prospect.prospectNumber });
@@ -1074,16 +1085,18 @@ bot.on('document', async (msg) => {
 
     for (let i = 0; i < showCount; i++) {
       const d = results[i];
-      const motorText = d.motor ? `🏍 ${d.motor.name}` : '⚠️ Kode motor tidak dikenali';
+      const isLOW = detectedLevel === 'LOW';
+      const motorText = d.motor ? `🏍 ${d.motor.name}` : (isLOW ? '' : '⚠️ Kode motor tidak dikenali');
       const occText = d.occupationHso ? d.occupationHso.name : d.pekerjaan;
       const creditText = d.statusKredit === 'KREDIT' ? '🔴 Kredit' : '🟢 Tunai';
-      
+
       replyTxt += `─────────────────\n`;
       replyTxt += `*#${d.no} — ${d.nama}*\n`;
       replyTxt += `👤 ${d.gender === 'LAKI_LAKI' ? 'Laki-laki' : 'Perempuan'} | ${d.agama}\n`;
-      replyTxt += `📍 ${d.alamat}, RT ${d.rt}/RW ${d.rw}\n`;
+      if (!isLOW) replyTxt += `📍 ${d.alamat}, RT ${d.rt}/RW ${d.rw}\n`;
       replyTxt += `📞 ${d.hp}\n`;
-      replyTxt += `${motorText} | ${creditText}\n`;
+      if (!isLOW) replyTxt += `${motorText} | ${creditText}\n`;
+      else replyTxt += `${creditText}\n`;
       replyTxt += `💼 ${occText}\n`;
     }
     
@@ -1155,16 +1168,18 @@ bot.on('message', async (msg) => {
     
     for (let i = 0; i < results.length; i++) {
       const d = results[i];
-      const motorText = d.motor ? `🏍 ${d.motor.name}` : '⚠️ Kode motor tidak dikenali';
+      const isLOW = detectedLevel === 'LOW';
+      const motorText = d.motor ? `🏍 ${d.motor.name}` : (isLOW ? '' : '⚠️ Kode motor tidak dikenali');
       const occText = d.occupationHso ? d.occupationHso.name : d.pekerjaan;
       const creditText = d.statusKredit === 'KREDIT' ? '🔴 Kredit' : '🟢 Tunai';
       
       replyTxt += `─────────────────\n`;
       replyTxt += `*#${d.no} — ${d.nama}*\n`;
       replyTxt += `👤 ${d.gender === 'LAKI_LAKI' ? 'Laki-laki' : 'Perempuan'} | ${d.agama}\n`;
-      replyTxt += `📍 ${d.alamat}, RT ${d.rt}/RW ${d.rw}, ${d.pekerjaan}\n`;
+      if (!isLOW) replyTxt += `📍 ${d.alamat}, RT ${d.rt}/RW ${d.rw}, ${d.pekerjaan}\n`;
       replyTxt += `📞 ${d.hp}\n`;
-      replyTxt += `${motorText} | ${creditText}\n`;
+      if (!isLOW) replyTxt += `${motorText} | ${creditText}\n`;
+      else replyTxt += `${creditText}\n`;
       replyTxt += `💼 ${occText}\n`;
     }
     
@@ -1217,16 +1232,18 @@ bot.on('message', async (msg) => {
     let replyTxt = `📊 *Preview FF/Excel* — ${results.length} data    ${levelEmoji} ${detectedLevel}\n\n`;
     
     for (const d of results) {
-      const motorText = d.motor ? `🏍 ${d.motor.name}` : '⚠️ Kode motor tidak dikenali';
+      const isLOW = detectedLevel === 'LOW';
+      const motorText = d.motor ? `🏍 ${d.motor.name}` : (isLOW ? '' : '⚠️ Kode motor tidak dikenali');
       const occText = d.occupationHso ? d.occupationHso.name : d.pekerjaan;
       const creditText = d.statusKredit === 'KREDIT' ? '🔴 Kredit' : '🟢 Tunai';
       
       replyTxt += `─────────────────\n`;
       replyTxt += `*#${d.no} — ${d.nama}*\n`;
       replyTxt += `👤 ${d.gender === 'LAKI_LAKI' ? 'Laki-laki' : 'Perempuan'} | ${d.agama}\n`;
-      replyTxt += `📍 ${d.alamat}, RT ${d.rt}/RW ${d.rw}\n`;
+      if (!isLOW) replyTxt += `📍 ${d.alamat}, RT ${d.rt}/RW ${d.rw}\n`;
       replyTxt += `📞 ${d.hp}\n`;
-      replyTxt += `${motorText} | ${creditText}\n`;
+      if (!isLOW) replyTxt += `${motorText} | ${creditText}\n`;
+      else replyTxt += `${creditText}\n`;
       replyTxt += `💼 ${occText}\n`;
     }
     
