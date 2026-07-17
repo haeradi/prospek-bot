@@ -620,20 +620,28 @@ bot.on('callback_query', async (q) => {
       }
     }
     
-    // Build result message
+    // Build result message — limit each section to avoid Telegram 4096 char limit
+    const MAX_SUCC_DETAIL = 10;
+    const MAX_FAIL_DETAIL = 5;
     let resultTxt = `📊 *Hasil FF/Excel*\n\n`;
     
     if (success.length > 0) {
       const newSucc = success.filter(s => !s.duplicate);
       const dups = success.filter(s => s.duplicate);
       resultTxt += `✅ *Berhasil baru: ${newSucc.length}*\n`;
-      for (const s of newSucc) {
+      for (const s of newSucc.slice(0, MAX_SUCC_DETAIL)) {
         resultTxt += `• ${s.nama} → \`${s.prospectNumber}\`\n`;
+      }
+      if (newSucc.length > MAX_SUCC_DETAIL) {
+        resultTxt += `  ... dan ${newSucc.length - MAX_SUCC_DETAIL} lainnya\n`;
       }
       if (dups.length > 0) {
         resultTxt += `\n🔄 *Sudah ada (duplicate): ${dups.length}*\n`;
-        for (const s of dups) {
+        for (const s of dups.slice(0, MAX_SUCC_DETAIL)) {
           resultTxt += `• ${s.nama} → \`${s.prospectNumber}\`\n`;
+        }
+        if (dups.length > MAX_SUCC_DETAIL) {
+          resultTxt += `  ... dan ${dups.length - MAX_SUCC_DETAIL} lainnya\n`;
         }
       }
       resultTxt += `\n`;
@@ -641,8 +649,11 @@ bot.on('callback_query', async (q) => {
     
     if (failed.length > 0) {
       resultTxt += `❌ *Gagal: ${failed.length}*\n`;
-      for (const f of failed) {
+      for (const f of failed.slice(0, MAX_FAIL_DETAIL)) {
         resultTxt += `• ${f.nama} (${f.hp})\n  → ${f.reason}\n`;
+      }
+      if (failed.length > MAX_FAIL_DETAIL) {
+        resultTxt += `  ... dan ${failed.length - MAX_FAIL_DETAIL} lainnya\n`;
       }
     }
     
@@ -1033,10 +1044,13 @@ bot.on('document', async (msg) => {
         { parse_mode: 'Markdown' });
     }
     
-    // Show preview
+    // Show preview — limit to first 5 details to avoid Telegram 4096 char limit
+    const MAX_PREVIEW = 5;
+    const showCount = Math.min(results.length, MAX_PREVIEW);
     let replyTxt = `📊 *Preview dari File* — ${results.length} data\n\n`;
-    
-    for (const d of results) {
+
+    for (let i = 0; i < showCount; i++) {
+      const d = results[i];
       const motorText = d.motor ? `🏍 ${d.motor.name}` : '⚠️ Kode motor tidak dikenali';
       const occText = d.occupationHso ? d.occupationHso.name : d.pekerjaan;
       const creditText = d.statusKredit === 'KREDIT' ? '🔴 Kredit' : '🟢 Tunai';
@@ -1050,6 +1064,9 @@ bot.on('document', async (msg) => {
       replyTxt += `💼 ${occText}\n`;
     }
     
+    if (results.length > MAX_PREVIEW) {
+      replyTxt += `\n... dan ${results.length - MAX_PREVIEW} data lainnya\n`;
+    }
     replyTxt += `\n─────────────────\n`;
     replyTxt += `✅ ${results.length} data siap diproses\n`;
     replyTxt += `⚠️ ${errors.length} parse error\n\n`;
