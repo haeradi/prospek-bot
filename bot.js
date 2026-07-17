@@ -597,19 +597,22 @@ bot.on('callback_query', async (q) => {
         const result = await callStar(MUT_CREATE, { data: body });
         const prospect = result.ensureCreateCustomerProspectFromCustomers;
 
-        // Follow-up as MEDIUM (verified 2026-07-17: followUpResult + updateStatus = MEDIUM persists)
-        try {
-          await callStar(MUT_FOLLOWUP, {
-            input: {
-              customerProspectId: prospect.id,
-              followUpMethod: 'WA',
-              followUpResult: 'MEDIUM',
-              description: 'FF/Excel - Minat motor, follow-up lanjut',
-              followUpDate: new Date().toISOString(),
-            }
-          });
-        } catch (e) {
-          console.log('Follow-up skip:', e.message);
+        // Follow-up jika MEDIUM, biarkan PROSPECT jika LOW
+        const currentLevel = s.ff_level || 'MEDIUM';
+        if (currentLevel !== 'LOW') {
+          try {
+            await callStar(MUT_FOLLOWUP, {
+              input: {
+                customerProspectId: prospect.id,
+                followUpMethod: 'WA',
+                followUpResult: 'MEDIUM',
+                description: 'FF/Excel - Minat motor, follow-up lanjut',
+                followUpDate: new Date().toISOString(),
+              }
+            });
+          } catch (e) {
+            console.log('Follow-up skip:', e.message);
+          }
         }
 
         success.push({ nama: d.nama, prospectNumber: prospect.prospectNumber });
@@ -623,7 +626,8 @@ bot.on('callback_query', async (q) => {
     // Build result message — limit each section to avoid Telegram 4096 char limit
     const MAX_SUCC_DETAIL = 10;
     const MAX_FAIL_DETAIL = 5;
-    let resultTxt = `📊 *Hasil FF/Excel*\n\n`;
+    const levelEmoji = s.ff_level === 'LOW' ? '🟢' : '🟡';
+    let resultTxt = `📊 *Hasil FF/Excel*   ${levelEmoji} ${s.ff_level || 'MEDIUM'}\n\n`;
     
     if (success.length > 0) {
       const newSucc = success.filter(s => !s.duplicate);
@@ -969,6 +973,13 @@ bot.on('document', async (msg) => {
         motor: idx('tipemotor'),
       };
       
+      // Detect level from columns: LOW = hanya 5 kolom dasar (jenis, kodeAsal, nama, gender, hp)
+      // MEDIUM = punya alamat/provinsi/motor dll
+      const hasMediumCols = colMap.alamat >= 0 || colMap.provinsi >= 0 || colMap.kota >= 0 
+                         || colMap.kecamatan >= 0 || colMap.rt >= 0 || colMap.motor >= 0;
+      const detectedLevel = hasMediumCols ? 'MEDIUM' : 'LOW';
+      const levelEmoji = detectedLevel === 'LOW' ? '🟢' : '🟡';
+      
       // Build text lines from Excel rows — now uses PIPE format
       for (let R = range.s.r + 1; R <= range.e.r; R++) {
         const row = {};
@@ -1047,7 +1058,7 @@ bot.on('document', async (msg) => {
     // Show preview — limit to first 5 details to avoid Telegram 4096 char limit
     const MAX_PREVIEW = 5;
     const showCount = Math.min(results.length, MAX_PREVIEW);
-    let replyTxt = `📊 *Preview dari File* — ${results.length} data\n\n`;
+    let replyTxt = `📊 *Preview dari File* — ${results.length} data    ${levelEmoji} ${detectedLevel}\n\n`;
 
     for (let i = 0; i < showCount; i++) {
       const d = results[i];
@@ -1072,7 +1083,7 @@ bot.on('document', async (msg) => {
     replyTxt += `⚠️ ${errors.length} parse error\n\n`;
     replyTxt += `💡 Klik *Kirim* untuk submit ke Star API`;
     
-    conv.set(chatId, { step: 'ff_confirm', ff_data: results, ff_errors: errors });
+    conv.set(chatId, { step: 'ff_confirm', ff_data: results, ff_errors: errors, ff_level: detectedLevel });
     
     return bot.sendMessage(chatId, replyTxt, {
       parse_mode: 'Markdown',
@@ -1122,8 +1133,13 @@ bot.on('message', async (msg) => {
         { parse_mode: 'Markdown', ...cancelBtn() });
     }
     
+    // Detect level from data: LOW jika alamat default & tidak ada motor
+    const isLowData = results.every(d => (!d.motor || !d.motor.code) && (!d.alamat || d.alamat === 'PENAJAM'));
+    const detectedLevel = isLowData ? 'LOW' : 'MEDIUM';
+    const levelEmoji = detectedLevel === 'LOW' ? '🟢' : '🟡';
+    
     // Show preview for each
-    let replyTxt = `📊 *Preview FF/Excel* — ${results.length} data\n\n`;
+    let replyTxt = `📊 *Preview FF/Excel* — ${results.length} data    ${levelEmoji} ${detectedLevel}\n\n`;
     
     for (let i = 0; i < results.length; i++) {
       const d = results[i];
@@ -1145,7 +1161,7 @@ bot.on('message', async (msg) => {
     replyTxt += `⚠️ ${errors.length} error`;
     
     // Save to session for confirmation
-    conv.set(chatId, { step: 'ff_confirm', ff_data: results, ff_errors: errors });
+    conv.set(chatId, { step: 'ff_confirm', ff_data: results, ff_errors: errors, ff_level: detectedLevel });
     
     return bot.sendMessage(chatId, replyTxt, {
       parse_mode: 'Markdown',
@@ -1180,8 +1196,13 @@ bot.on('message', async (msg) => {
         { parse_mode: 'Markdown' });
     }
     
+    // Detect level from data: LOW jika alamat default & tidak ada motor
+    const isLowData = results.every(d => (!d.motor || !d.motor.code) && (!d.alamat || d.alamat === 'PENAJAM'));
+    const detectedLevel = isLowData ? 'LOW' : 'MEDIUM';
+    const levelEmoji = detectedLevel === 'LOW' ? '🟢' : '🟡';
+    
     // Show preview
-    let replyTxt = `📊 *Preview FF/Excel* — ${results.length} data\n\n`;
+    let replyTxt = `📊 *Preview FF/Excel* — ${results.length} data    ${levelEmoji} ${detectedLevel}\n\n`;
     
     for (const d of results) {
       const motorText = d.motor ? `🏍 ${d.motor.name}` : '⚠️ Kode motor tidak dikenali';
@@ -1202,7 +1223,7 @@ bot.on('message', async (msg) => {
     replyTxt += `⚠️ ${errors.length} parse error\n\n`;
     replyTxt += `💡 Klik *Kirim* untuk submit ke Star API`;
     
-    conv.set(chatId, { step: 'ff_confirm', ff_data: results, ff_errors: errors });
+    conv.set(chatId, { step: 'ff_confirm', ff_data: results, ff_errors: errors, ff_level: detectedLevel });
     
     return bot.sendMessage(chatId, replyTxt, {
       parse_mode: 'Markdown',
