@@ -316,7 +316,11 @@ const parseIndividuLine = (line) => {
   }
   
   const occupation = getOccupationHso(pekerjaan);
-  const motor = kodeMotor ? { code: kodeMotor, name: getMotorList().find(m => m.code === kodeMotor)?.name || kodeMotor } : null;
+  // Only set motor if kodeMotor is a valid motor code (not TUNAI, kosong, etc.)
+  const motorCodes = new Set(getMotorList().map(m => m.code));
+  const motor = kodeMotor && motorCodes.has(kodeMotor)
+    ? { code: kodeMotor, name: getMotorList().find(m => m.code === kodeMotor)?.name || kodeMotor }
+    : null;
   
   return {
     success: true,
