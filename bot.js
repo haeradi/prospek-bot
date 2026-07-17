@@ -1028,17 +1028,15 @@ bot.on('document', async (msg) => {
           lines.push(pipeParts.join('|'));
         }
       }
-      
     } else {
       // CSV/TXT - read as text
       const content = await response.text();
       lines = content.split('\n').filter(l => l.trim().length > 0);
     }
     
-    // Parse lines using existing parser
+    // Parse lines
     const results = [];
     const errors = [];
-    
     for (const line of lines) {
       if (!line.toLowerCase().startsWith('individu')) continue;
       const parsed = parseIndividuLine(line);
@@ -1051,9 +1049,17 @@ bot.on('document', async (msg) => {
     
     if (results.length === 0) {
       return bot.sendMessage(chatId,
-        `❌ *Gagal parse data*\n\nFile tidak mengandung format "individu".\n\nPastikan format Excel/CSV:\n\`individu NO NAMA LAKI-LAKI ALAMAT... KODEMOTOR\``,
+        `❌ *Gagal parse data*\n\nFile tidak mengandung format "individu".`,
         { parse_mode: 'Markdown' });
     }
+    
+    // Resolve level: Excel uses column detection (set above); CSV/TXT uses data heuristic
+    if (!isExcel) {
+      const isLowData = results.every(d => (!d.motor || !d.motor.code) && (!d.alamat || d.alamat === 'PENAJAM'));
+      detectedLevel = isLowData ? 'LOW' : 'MEDIUM';
+      levelEmoji = detectedLevel === 'LOW' ? '🟢' : '🟡';
+    }
+    // For Excel: detectedLevel & levelEmoji already set inside the isExcel block above
     
     // Show preview — limit to first 5 details to avoid Telegram 4096 char limit
     const MAX_PREVIEW = 5;
