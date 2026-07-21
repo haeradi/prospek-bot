@@ -1042,7 +1042,7 @@ bot.on('callback_query', async (q) => {
 
     await bot.answerCallbackQuery(q.id, { text: '⏳ Memproses...' });
 
-    const MUT_ND = `mutation UpdateNotDeal($id: ID!, $reason: String!) { ensureUpdateCustomerProspectStatusFromCustomers(input: {customerProspectId: $id, prospectStatus: LOST, reasonNotDeal: $reason}) { id prospectStatus } }`;
+    const MUT_ND = `mutation UpdateNotDeal($prospectId: ID!, $reason: String!) { ensureUpdateCustomerProspectStatusFromCustomers(input: {customerProspectId: $prospectId, prospectStatus: LOST, reasonNotDeal: $reason}) { id name prospectStatus } }`;
 
     let totalOk = 0, totalFail = 0, totalSkipped = 0;
     const failedList = [];
@@ -1066,7 +1066,7 @@ bot.on('callback_query', async (q) => {
               totalSkipped++; continue;
             }
             try {
-              callStar(MUT_ND, { id: p.id, reason });
+              callStar(MUT_ND, { prospectId: p.id, reason });
               totalOk++;
             } catch (e) {
               totalFail++;
