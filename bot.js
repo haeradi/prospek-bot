@@ -994,7 +994,7 @@ bot.on('callback_query', async (q) => {
     const reason = 'TIDAK_BERMINAT';
     const statusLabel = targetStatus === 'ALL' ? 'HOT + MEDIUM + LOW' : targetStatus;
 
-    // Count prospects per status
+    // Count prospects per status via paginated fetch (first:10, same as execute — S0001-safe)
     const statuses = targetStatus === 'ALL' ? ['HOT', 'MEDIUM', 'LOW'] : [targetStatus];
     const counts = {};
     let totalCount = 0;
@@ -1002,12 +1002,23 @@ bot.on('callback_query', async (q) => {
 
     try {
       for (const st of statuses) {
-        // Use first:1 + totalCount for accurate count (not limited by first:N)
-        const q = '{ getCustomerProspectFromCustomers(first: 1, where: { prospectNumber: { startsWith: "H704-PRS" }, prospectStatus: { eq: ' + st + ' }, createdBy: { eq: "' + JWT_UUID + '" }, created: { gte: "2026-07-01T00:00:00Z", lte: "2026-07-31T23:59:59Z" } }) { totalCount nodes { id prospectNumber name prospectStatus } pageInfo { hasNextPage } } }';
-        const d = callStar(q);
-        counts[st] = d.getCustomerProspectFromCustomers.totalCount;
-        totalCount += counts[st];
-        if (previewNodes.length < 5) previewNodes.push(...d.getCustomerProspectFromCustomers.nodes);
+        let count = 0;
+        let after = null;
+        let hasMore = true;
+        while (hasMore) {
+          const cursorArg = after ? `, after: "${after}"` : '';
+          const q = '{ getCustomerProspectFromCustomers(first: 10' + cursorArg + ', where: { prospectNumber: { startsWith: "H704-PRS" }, prospectStatus: { eq: ' + st + ' }, createdBy: { eq: "' + JWT_UUID + '" }, created: { gte: "2026-07-01T00:00:00Z", lte: "2026-07-31T23:59:59Z" } }) { nodes { id prospectNumber name prospectStatus } pageInfo { hasNextPage endCursor } } }';
+          const d = callStar(q);
+          const nodes = d.getCustomerProspectFromCustomers.nodes;
+          const pi = d.getCustomerProspectFromCustomers.pageInfo;
+          count += nodes.length;
+          if (previewNodes.length < 5) previewNodes.push(...nodes);
+          hasMore = pi.hasNextPage;
+          after = pi.endCursor;
+          if (hasMore) await new Promise(r => setTimeout(r, 2000));
+        }
+        counts[st] = count;
+        totalCount += count;
       }
     } catch (e) {
       return editMsg(chatId, msgId, `❌ Gagal fetch prospects: ${e.message}`, backBtn('notdeal:menu'));
