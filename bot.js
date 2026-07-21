@@ -199,8 +199,20 @@ const bot = new TelegramBot(TG_TOKEN, {
   }
 });
 
-// In-memory conversation state
-const conv = new Map(); // chatId -> { step, level, data }
+// In-memory conversation state (persisted to state.json on every set)
+// Safe: only affects bot conversation flow, does NOT touch Star API calls
+let conv = new Map();
+try { const saved = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')); conv = new Map(Object.entries(saved)); } catch {}
+
+// Wrapped conv.set — auto-saves to disk on every change
+const convSet = (chatId, state) => {
+  conv.set(chatId, state);
+  try {
+    const obj = Object.fromEntries(conv);
+    fs.writeFileSync(STATE_FILE, JSON.stringify(obj, null, 2));
+  } catch {}
+};
+const convGet = (chatId) => conv.get(chatId);
 
 // ====== KEYBOARDS ======
 const mainMenu = {
@@ -526,7 +538,7 @@ bot.on('callback_query', async (q) => {
   const chatId = q.message.chat.id;
   const msgId = q.message.message_id;
   const data = q.data;
-  const c = conv.get(chatId) || {};
+  const c = convGet(chatId) || {};
   await bot.answerCallbackQuery(q.id);
 
   // --- CANCEL ---
@@ -550,13 +562,13 @@ bot.on('callback_query', async (q) => {
   if (data === 'setjwt') {
     await editMsg(chatId, msgId,
       '🔑 *Set JWT Token*\n\nKirim token JWT:\n`/jwt <token>`', cancelBtn());
-    conv.set(chatId, { step: 'wait_jwt' });
+    convSet(chatId, { step: 'wait_jwt' });
     return;
   }
 
   // --- FF/EXCEL MENU ---
   if (data === 'ff:menu') {
-    conv.set(chatId, { step: 'ff_input' });
+    convSet(chatId, { step: 'ff_input' });
     return editMsg(chatId, msgId,
       '📊 *FF / Excel Input*\n\n' +
       'Kirim data dalam format:\n\n' +
@@ -573,7 +585,7 @@ bot.on('callback_query', async (q) => {
 
   // --- FF SUBMIT ALL ---
   if (data === 'ff:submit_all') {
-    const s = conv.get(chatId);
+    const s = convGet(chatId);
     if (!s || s.step !== 'ff_confirm' || !s.ff_data) {
       return editMsg(chatId, msgId, '❌ Session expired. Mulai ulang dari menu.', mainMenu);
     }
@@ -759,14 +771,14 @@ bot.on('callback_query', async (q) => {
     const level = data.split(':')[1];
     if (!['LOW','MEDIUM','HOT'].includes(level)) return;
     const descs = { LOW: 'Nama + HP + Asal', MEDIUM: 'Nama + HP + Asal + Motor + Alamat', HOT: 'Nama + HP + Asal + Motor + NIK + Alamat' };
-    conv.set(chatId, { step: 'ask_name', level, data: {} });
+    convSet(chatId, { step: 'ask_name', level, data: {} });
     return editMsg(chatId, msgId,
       `📝 *Prospek ${level}*\nField: ${descs[level]}\n\nSilakan masukkan **nama lengkap customer**:`, cancelBtn());
   }
 
   // --- ASAL PROSPEK SELECTED ---
   if (data.startsWith('asal:')) {
-    const s = conv.get(chatId);
+    const s = convGet(chatId);
     if (!s || s.step !== 'ask_asal') return;
     const asalKey = data.split(':')[1];
     const asal = ASAL_PROSPEK[asalKey];
@@ -774,7 +786,7 @@ bot.on('callback_query', async (q) => {
     s.data.asalId = asal.id;
     s.data.asalName = asal.name;
     s.data.asalKey = asalKey;
-    conv.set(chatId, s);
+    convSet(chatId, s);
     
     // LOW: selesai, langsung preview
     if (s.level === 'LOW') {
@@ -782,28 +794,28 @@ bot.on('callback_query', async (q) => {
     }
     // MEDIUM/HOT: pilih motor
     s.step = 'ask_motor';
-    conv.set(chatId, s);
+    convSet(chatId, s);
     return editMsg(chatId, msgId, `📌 Asal: *${asal.name}*\n\n🏍 *Pilih TIPE MOTOR*:`, motorKeyboard());
   }
 
   // --- MOTOR SELECTED (via keyboard) ---
   if (data.startsWith('motor:')) {
-    const s = conv.get(chatId);
+    const s = convGet(chatId);
     if (!s || s.step !== 'ask_motor') return;
     const motorCode = data.split(':')[1];
     s.data.motorCode = motorCode;
     s.data.motorType = motorCode;
-    conv.set(chatId, s);
+    convSet(chatId, s);
     
     // Lanjut occupation
     s.step = 'ask_occupation';
-    conv.set(chatId, s);
+    convSet(chatId, s);
     return editMsg(chatId, msgId, `🏍 Motor: *${motorCode}*\n\n💼 Masukkan **pekerjaan** customer:\n(contoh: Pedagang, Petani, Wiraswasta, Ibu RT, Karyawan)`, cancelBtn());
   }
 
   // --- MOTOR LIST (show all available) ---
   if (data === 'motor:list') {
-    const s = conv.get(chatId);
+    const s = convGet(chatId);
     if (!s || s.step !== 'ask_motor') return;
     const motors = getMotorList();
     let txt = `🏍 *Daftar Kode Motor:*\n\n`;
@@ -811,13 +823,13 @@ bot.on('callback_query', async (q) => {
       txt += `• *${m.code}* - ${m.name}\n`;
     }
     txt += `\nKetik kode motor (misal: LY2, Vario 125):`;
-    conv.set(chatId, { ...s, step: 'ask_motor_text' });
+    convSet(chatId, { ...s, step: 'ask_motor_text' });
     return editMsg(chatId, msgId, txt, cancelBtn());
   }
 
   // --- CONFIRM CREATE ---
   if (data === 'confirm') {
-    const s = conv.get(chatId);
+    const s = convGet(chatId);
     if (!s || !s.data || !s.data.name) return;
     const { name, phone, motorType, nik, address, occupation, asalId, asalName } = s.data;
     try {
@@ -846,7 +858,7 @@ bot.on('callback_query', async (q) => {
 
   // --- UPGRADE MENU ---
   if (data === 'upgrade:menu') {
-    conv.set(chatId, { step: 'upgrade_search' });
+    convSet(chatId, { step: 'upgrade_search' });
     return editMsg(chatId, msgId,
       '⬆️ *Upgrade Status Prospek*\n\nMasukkan nomor HP atau nama customer yang ingin di-upgrade:',
       cancelBtn());
@@ -874,7 +886,7 @@ bot.on('callback_query', async (q) => {
         
         // Konfirmasi
         const txt = `⬆️ *Konfirmasi Upgrade*\n\n📌 ${node.prospectNumber}\n👤 ${node.name}\n📞 ${node.mobilePhoneNumber}\n📊 ${curStatus} → *${status}*\n\nLanjutkan?`;
-        conv.set(chatId, { step: 'upgrade_confirm', prospectId, newStatus: status, curStatus });
+        convSet(chatId, { step: 'upgrade_confirm', prospectId, newStatus: status, curStatus });
         return editMsg(chatId, msgId, txt, {
           reply_markup: {
             inline_keyboard: [
@@ -888,7 +900,7 @@ bot.on('callback_query', async (q) => {
       }
     }
     if (action === 'do') {
-      const s = conv.get(chatId);
+      const s = convGet(chatId);
       if (!s?.prospectId) return;
       try {
         const result = await updateStatus(s.prospectId, s.newStatus);
@@ -907,7 +919,7 @@ bot.on('callback_query', async (q) => {
 
   // --- SEARCH ---
   if (data === 'search:menu') {
-    conv.set(chatId, { step: 'search' });
+    convSet(chatId, { step: 'search' });
     return editMsg(chatId, msgId,
       '📋 *Cari Prospek*\n\nMasukkan nama atau nomor HP customer:',
       cancelBtn());
@@ -962,7 +974,7 @@ bot.on('callback_query', async (q) => {
 
   // --- NOT DEAL MENU ---
   if (data === 'notdeal:menu') {
-    conv.set(chatId, { step: 'notdeal_status' });
+    convSet(chatId, { step: 'notdeal_status' });
     return editMsg(chatId, msgId,
       '🚫 *Bulk Not Deal*\n' +
       'Reason : *TIDAK_BERMINAT*\n' +
@@ -974,10 +986,10 @@ bot.on('callback_query', async (q) => {
   // --- NOT DEAL: STATUS SELECTED --- show preview & confirm
   if (data.startsWith('notdeal:status:')) {
     const targetStatus = data.split(':')[2]; // HOT, MEDIUM, LOW, or ALL
-    const s = conv.get(chatId) || {};
+    const s = convGet(chatId) || {};
     s.notdeal_status = targetStatus;
     s.notdeal_reason = 'TIDAK_BERMINAT'; // hardcoded
-    conv.set(chatId, s);
+    convSet(chatId, s);
 
     const reason = 'TIDAK_BERMINAT';
     const statusLabel = targetStatus === 'ALL' ? 'HOT + MEDIUM + LOW' : targetStatus;
@@ -1019,7 +1031,7 @@ bot.on('callback_query', async (q) => {
     preview += `Proses ini TIDAK bisa di-undo.\\n\\n`;
     preview += `Ketik *YA* untuk konfirmasi, atau batal.`;
 
-    conv.set(chatId, { ...s, step: 'notdeal_confirm' });
+    convSet(chatId, { ...s, step: 'notdeal_confirm' });
     return editMsg(chatId, msgId, preview, {
       reply_markup: {
         inline_keyboard: [
@@ -1032,7 +1044,7 @@ bot.on('callback_query', async (q) => {
 
   // --- NOT DEAL: EXECUTE ---
   if (data === 'notdeal:do') {
-    const s = conv.get(chatId) || {};
+    const s = convGet(chatId) || {};
     if (!s.notdeal_reason) return editMsg(chatId, msgId, '❌ Session expired.', mainMenu);
 
     const reason = 'TIDAK_BERMINAT';
@@ -1332,7 +1344,7 @@ bot.on('document', async (msg) => {
     replyTxt += `⚠️ ${errors.length} parse error\n\n`;
     replyTxt += `💡 Klik *Kirim* untuk submit ke Star API`;
     
-    conv.set(chatId, { step: 'ff_confirm', ff_data: results, ff_errors: errors, ff_level: detectedLevel });
+    convSet(chatId, { step: 'ff_confirm', ff_data: results, ff_errors: errors, ff_level: detectedLevel });
     
     return bot.sendMessage(chatId, replyTxt, {
       parse_mode: 'Markdown',
@@ -1356,7 +1368,7 @@ bot.on('message', async (msg) => {
   const text = msg.text.trim();
   if (text.startsWith('/')) return; // commands handled above
   const chatId = msg.chat.id;
-  const s = conv.get(chatId);
+  const s = convGet(chatId);
   if (!s) return;
 
   // --- FF/EXCEL INPUT ---
@@ -1412,7 +1424,7 @@ bot.on('message', async (msg) => {
     replyTxt += `⚠️ ${errors.length} error`;
     
     // Save to session for confirmation
-    conv.set(chatId, { step: 'ff_confirm', ff_data: results, ff_errors: errors, ff_level: detectedLevel });
+    convSet(chatId, { step: 'ff_confirm', ff_data: results, ff_errors: errors, ff_level: detectedLevel });
     
     return bot.sendMessage(chatId, replyTxt, {
       parse_mode: 'Markdown',
@@ -1476,7 +1488,7 @@ bot.on('message', async (msg) => {
     replyTxt += `⚠️ ${errors.length} parse error\n\n`;
     replyTxt += `💡 Klik *Kirim* untuk submit ke Star API`;
     
-    conv.set(chatId, { step: 'ff_confirm', ff_data: results, ff_errors: errors, ff_level: detectedLevel });
+    convSet(chatId, { step: 'ff_confirm', ff_data: results, ff_errors: errors, ff_level: detectedLevel });
     
     return bot.sendMessage(chatId, replyTxt, {
       parse_mode: 'Markdown',
@@ -1494,7 +1506,7 @@ bot.on('message', async (msg) => {
     if (text.length < 2) return bot.sendMessage(chatId, '❌ Nama terlalu pendek. Minimal 2 karakter.');
     s.data.name = text;
     s.step = 'ask_phone';
-    conv.set(chatId, s);
+    convSet(chatId, s);
     return promptMsg(chatId, `👤 Nama: *${text}*\n\n📞 Masukkan **nomor HP** (628xxx):`, cancelBtn());
   }
 
@@ -1505,7 +1517,7 @@ bot.on('message', async (msg) => {
     if (phone.length < 10) return bot.sendMessage(chatId, '❌ Nomor tidak valid. Minimal 10 digit (628xxx).');
     s.data.phone = phone;
     s.step = 'ask_asal';
-    conv.set(chatId, s);
+    convSet(chatId, s);
     return bot.sendMessage(chatId, `📞 HP: ${phone}\n\n📌 *Pilih ASAL PROSPEK*:`, asalKeyboard());
   }
 
@@ -1516,12 +1528,12 @@ bot.on('message', async (msg) => {
     
     if (s.level === 'MEDIUM') {
       s.step = 'ask_address';
-      conv.set(chatId, s);
+      convSet(chatId, s);
       return promptMsg(chatId, `💼 Pekerjaan: *${text}*\n\n📍 Masukkan **alamat** (nama jalan, no rumah):`, cancelBtn());
     }
     // HOT: lanjut NIK dulu
     s.step = 'ask_nik';
-    conv.set(chatId, s);
+    convSet(chatId, s);
     return promptMsg(chatId, `💼 Pekerjaan: *${text}*\n\n🆔 Masukkan **NIK** (16 digit):`, cancelBtn());
   }
 
@@ -1534,7 +1546,7 @@ bot.on('message', async (msg) => {
     s.data.motorCode = motor.code;
     s.data.motorType = motor.name;
     s.step = 'ask_occupation';
-    conv.set(chatId, s);
+    convSet(chatId, s);
     return promptMsg(chatId, `🏍 Motor: *${motor.name}*\n\n💼 Masukkan **pekerjaan** customer:\n(contoh: Pedagang, Petani, Wiraswasta, Ibu RT, Karyawan)`, cancelBtn());
   }
 
@@ -1544,7 +1556,7 @@ bot.on('message', async (msg) => {
     if (nik.length < 16) return bot.sendMessage(chatId, '❌ NIK harus 16 digit.');
     s.data.nik = nik;
     s.step = 'ask_address';
-    conv.set(chatId, s);
+    convSet(chatId, s);
     return promptMsg(chatId, `🆔 NIK: ${nik}\n\n📍 Masukkan **alamat** customer:`, cancelBtn());
   }
 
@@ -1577,7 +1589,7 @@ bot.on('message', async (msg) => {
         buttons.push([{ text: `${p.name} — ${p.prospectStatus}`, callback_data: `search:select:${p.id}` }]);
       }
       buttons.push([{ text: '⬅️ Cari Lagi', callback_data: 'upgrade:menu' }, { text: '🏠 Menu', callback_data: 'menu' }]);
-      conv.set(chatId, { step: 'upgrade_select' });
+      convSet(chatId, { step: 'upgrade_select' });
       return bot.sendMessage(chatId, txt, { reply_markup: { inline_keyboard: buttons } });
     } catch (e) {
       return bot.sendMessage(chatId, `❌ Error: ${e.message}`, cancelBtn());
@@ -1605,7 +1617,7 @@ bot.on('message', async (msg) => {
         buttons.push([{ text: `${p.name} (${p.prospectStatus})`, callback_data: `search:select:${p.id}` }]);
       }
       buttons.push([{ text: '🏠 Menu', callback_data: 'menu' }]);
-      conv.set(chatId, { step: 'search_result' });
+      convSet(chatId, { step: 'search_result' });
       return bot.sendMessage(chatId, txt, { reply_markup: { inline_keyboard: buttons } });
     } catch (e) {
       return bot.sendMessage(chatId, `❌ Error: ${e.message}`, cancelBtn());
@@ -1623,7 +1635,7 @@ async function showPreview(chatId, s) {
   if (nik) txt += `🆔 NIK: ${nik}\n`;
   if (address) txt += `📍 ${address}\n`;
   txt += `\n🔑 Sales: ${jwtName()}\n🏢 ${jwtChannelName()}\n📊 *${s.level}*`;
-  conv.set(chatId, { ...s, step: 'preview' });
+  convSet(chatId, { ...s, step: 'preview' });
   await bot.sendMessage(chatId, txt, { parse_mode: 'Markdown', ...confirmBtn() });
 }
 
