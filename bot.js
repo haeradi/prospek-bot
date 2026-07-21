@@ -1002,12 +1002,12 @@ bot.on('callback_query', async (q) => {
 
     try {
       for (const st of statuses) {
-        const q = '{ getCustomerProspectFromCustomers(first: 10, where: { prospectNumber: { startsWith: "H704-PRS" }, prospectStatus: { eq: ' + st + ' }, createdBy: { eq: "' + JWT_UUID + '" }, created: { gte: "2026-07-01T00:00:00Z", lte: "2026-07-31T23:59:59Z" } }) { nodes { id prospectNumber name prospectStatus } pageInfo { hasNextPage } } }';
+        // Use first:1 + totalCount for accurate count (not limited by first:N)
+        const q = '{ getCustomerProspectFromCustomers(first: 1, where: { prospectNumber: { startsWith: "H704-PRS" }, prospectStatus: { eq: ' + st + ' }, createdBy: { eq: "' + JWT_UUID + '" }, created: { gte: "2026-07-01T00:00:00Z", lte: "2026-07-31T23:59:59Z" } }) { totalCount nodes { id prospectNumber name prospectStatus } pageInfo { hasNextPage } } }';
         const d = callStar(q);
-        const nodes = d.getCustomerProspectFromCustomers.nodes;
-        counts[st] = nodes.length;
-        totalCount += nodes.length;
-        if (previewNodes.length < 5) previewNodes.push(...nodes);
+        counts[st] = d.getCustomerProspectFromCustomers.totalCount;
+        totalCount += counts[st];
+        if (previewNodes.length < 5) previewNodes.push(...d.getCustomerProspectFromCustomers.nodes);
       }
     } catch (e) {
       return editMsg(chatId, msgId, `❌ Gagal fetch prospects: ${e.message}`, backBtn('notdeal:menu'));
@@ -1021,15 +1021,17 @@ bot.on('callback_query', async (q) => {
 
     let preview = `🚫 *Preview Bulk Not Deal*\\n\\n`;
     preview += `Reason : *${reason}*\\n`;
-    preview += `Status : *${statusLabel}*\\n`;
-    preview += `Total  : *${totalCount}* prospects\\n\\n`;
-    preview += `📋 Sample prospects:\\n`;
-    for (const p of previewNodes.slice(0, 5)) {
-      preview += `  • ${p.prospectNumber} | ${p.name} (${p.prospectStatus})\\n`;
+    preview += `Total  : *${totalCount}* prospects\\n`;
+    if (targetStatus === 'ALL') {
+      preview += `  ├ HOT    : *${counts.HOT || 0}*\\n`;
+      preview += `  ├ MEDIUM : *${counts.MEDIUM || 0}*\\n`;
+      preview += `  └ LOW    : *${counts.LOW || 0}*\\n`;
+    } else {
+      preview += `  └ Status : *${statusLabel}*\\n`;
     }
-    preview += `\\n⚠️ SEMUA prospects di atas akan menjadi *LOST*.\\n`;
+    preview += `\\n⚠️ SEMUA prospek akan menjadi *LOST*.\\n`;
     preview += `Proses ini TIDAK bisa di-undo.\\n\\n`;
-    preview += `Ketik *YA* untuk konfirmasi, atau batal.`;
+    preview += `Ketik *YA* untuk konfirmasi, atau *BATAL*.`;
 
     convSet(chatId, { ...s, step: 'notdeal_confirm' });
     return editMsg(chatId, msgId, preview, {
