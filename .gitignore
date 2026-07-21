@@ -1,6 +1,9 @@
 node_modules/
 .env
 jwt.txt
+jwt-saskia.txt
+jwt-reski.txt
 state.json
 tg_token.txt
+test-count.js
 *.log

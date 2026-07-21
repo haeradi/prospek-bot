@@ -17,19 +17,27 @@ try { jwt = fs.readFileSync(JWT_FILE, 'utf8').trim(); } catch {}
 
 // ====== STAR API ======
 const STAR_API = 'https://api.star.astra.co.id/graphql/';
-const callStar = async (query, vars) => {
-  if (!jwt) throw new Error('JWT belum di-set. Kirim /jwt <token>');
-  const r = await fetch(STAR_API, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      authorization: `Bearer ${jwt}`,
-    },
-    body: JSON.stringify({ query, variables: vars }),
-  });
-  const text = await r.text();
-  if (!text) throw new Error('Empty response from Star API');
-  const json = JSON.parse(text);
+const ORIGIN   = 'https://assist.star.astra.co.id';
+
+// callStar uses execSync+curl (more reliable than Node fetch for Star API)
+const execSync = require('child_process').execSync;
+const callStar = (query, vars) => {
+  const body = JSON.stringify({ query, variables: vars || {} });
+  const escaped = body.replace(/'/g, "'\\''");
+  const cmd = `curl -s --max-time 30 '${STAR_API}' ` +
+    `-H 'Authorization: Bearer ${jwt}' ` +
+    `-H 'Content-Type: application/json' ` +
+    `-H 'origin: ${ORIGIN}' ` +
+    `-H 'referer: ${ORIGIN}/' ` +
+    `-H 'user-agent: Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Mobile Safari/537.36' ` +
+    `-d '${escaped}'`;
+  let stdout;
+  try {
+    stdout = execSync(cmd, { encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 });
+  } catch (e) {
+    if (e.stdout) stdout = e.stdout; else throw e;
+  }
+  const json = JSON.parse(stdout);
   if (json.errors) throw new Error(json.errors.map(e => e.message).join(', '));
   return json.data;
 };
@@ -195,7 +203,8 @@ const mainMenu = {
        { text: '📋 Cari Prospek', callback_data: 'search:menu' }],
       [{ text: '📊 FF / Excel', callback_data: 'ff:menu' },
        { text: '🔑 Set JWT', callback_data: 'setjwt' }],
-      [{ text: 'ℹ️ Status', callback_data: 'status' }],
+      [{ text: '🚫 Bulk Not Deal', callback_data: 'notdeal:menu' },
+       { text: 'ℹ️ Status', callback_data: 'status' }],
     ]
   }
 };
@@ -203,6 +212,34 @@ const mainMenu = {
 const cancelBtn = () => ({ reply_markup: { inline_keyboard: [[{ text: '⬅️ Batal', callback_data: 'cancel' }]] } });
 const backBtn = (cb) => ({ reply_markup: { inline_keyboard: [[{ text: '⬅️ Kembali', callback_data: cb }]] } });
 const confirmBtn = () => ({ reply_markup: { inline_keyboard: [[{ text: '✅ Kirim', callback_data: 'confirm' }, { text: '⬅️ Batal', callback_data: 'cancel' }]] } });
+
+// ====== NOT DEAL REASONS ======
+const REASONS_NOT_DEAL = [
+  'TIDAK_BERMINAT', 'HARGA_MAHAL', 'SUDAH_PUNYA', 'DOWN_PAYMENT_MAHAL',
+  'JARAK_TEMPAT', 'RESPON_LAMBAT', 'TIDAK_RESPON', 'BANTUAN_PIMPINAN',
+  'LAINNYA', 'SISA_STOK', 'MOTOR_SEDANG_SERVIS', 'TIDAK_LAYAK_KREDIT',
+  'OVER_KREDIT', 'BANDING_HARGA'
+];
+const reasonKeyboard = () => {
+  const rows = [];
+  for (let i = 0; i < REASONS_NOT_DEAL.length; i += 2) {
+    rows.push(REASONS_NOT_DEAL.slice(i, i + 2).map(r => ({ text: r, callback_data: `notdeal:reason:${r}` })));
+  }
+  rows.push([{ text: '⬅️ Batal', callback_data: 'cancel' }]);
+  return { reply_markup: { inline_keyboard: rows } };
+};
+
+const notdealStatusKeyboard = () => ({
+  reply_markup: {
+    inline_keyboard: [
+      [{ text: '🔥 HOT', callback_data: 'notdeal:status:HOT' },
+       { text: '🟡 MEDIUM', callback_data: 'notdeal:status:MEDIUM' }],
+      [{ text: '🟢 LOW', callback_data: 'notdeal:status:LOW' }],
+      [{ text: '🔴 SEMUA (HOT+MEDIUM+LOW)', callback_data: 'notdeal:status:ALL' }],
+      [{ text: '⬅️ Batal', callback_data: 'cancel' }],
+    ]
+  }
+});
 
 const promptMsg = (chatId, text, opts) => bot.sendMessage(chatId, text, { parse_mode: 'Markdown', ...opts });
 const editMsg = async (chatId, msgId, text, opts) => {
@@ -412,14 +449,14 @@ const createProspek = async (data) => {
     body.occupation = data.occupation;
   }
   
-  const result = await callStar(MUT_CREATE, { data: body });
+  const result = callStar(MUT_CREATE, { data: body });
   const prospect = result.ensureCreateCustomerProspectFromCustomers;
   
   // Auto update status untuk MEDIUM/HOT via ensureUpdateCustomerProspectStatusFromCustomers
   if (!isLOW) {
     const statusLevel = data.level; // 'MEDIUM' or 'HOT'
     try {
-      await callStar(MUT_UPDATE_STATUS, {
+      callStar(MUT_UPDATE_STATUS, {
         data: {
           customerProspectId: prospect.id,
           prospectStatus: statusLevel,
@@ -435,7 +472,7 @@ const createProspek = async (data) => {
   return prospect;
 };
 
-const updateStatus = async (prospectId, status) => {
+const updateStatus = (prospectId, status) => {
   return callStar(MUT_UPDATE_STATUS, {
     data: { customerProspectId: prospectId, prospectStatus: status, reason: 'Update via @Rd_prospek_bot' }
   });
@@ -907,6 +944,161 @@ bot.on('callback_query', async (q) => {
       return editMsg(chatId, msgId, `❌ Error: ${e.message}`, backBtn('menu'));
     }
     return;
+  }
+
+  // =============================================
+  // ====== BULK NOT DEAL HANDLERS ===============
+  // =============================================
+
+  // --- NOT DEAL MENU ---
+  if (data === 'notdeal:menu') {
+    conv.set(chatId, { step: 'notdeal_reason' });
+    return editMsg(chatId, msgId,
+      '🚫 *Bulk Not Deal*\\n\\n' +
+      'Pilih *REASON* untuk semua prospek:\\n' +
+      '(semua reason: TIDAK_BERMINAT, HARGA_MAHAL, SUDAH_PUNYA, dll.)\\n\\n' +
+      '📌 Reason dipilih dulu, baru status (HOT/MEDIUM/LOW/SEMUA)',
+      reasonKeyboard());
+  }
+
+  // --- NOT DEAL: REASON SELECTED ---
+  if (data.startsWith('notdeal:reason:')) {
+    const reason = data.split(':')[2];
+    if (!REASONS_NOT_DEAL.includes(reason)) return;
+    const s = conv.get(chatId) || {};
+    s.notdeal_reason = reason;
+    s.step = 'notdeal_status';
+    conv.set(chatId, s);
+    return editMsg(chatId, msgId,
+      `🚫 Reason: *${reason}*\\n\\n` +
+      `Sekarang pilih *STATUS* prospek yang ingin di-NOT DEAL-kan:`,
+      notdealStatusKeyboard());
+  }
+
+  // --- NOT DEAL: STATUS SELECTED --- show preview & confirm
+  if (data.startsWith('notdeal:status:')) {
+    const targetStatus = data.split(':')[2]; // HOT, MEDIUM, LOW, or ALL
+    const s = conv.get(chatId) || {};
+    if (!s.notdeal_reason) return editMsg(chatId, msgId, '❌ Session expired. Mulai ulang.', mainMenu);
+    s.notdeal_status = targetStatus;
+    conv.set(chatId, s);
+
+    const reason = s.notdeal_reason;
+    const statusLabel = targetStatus === 'ALL' ? 'HOT + MEDIUM + LOW' : targetStatus;
+
+    // Count prospects per status
+    const statuses = targetStatus === 'ALL' ? ['HOT', 'MEDIUM', 'LOW'] : [targetStatus];
+    const counts = {};
+    let totalCount = 0;
+    let previewNodes = [];
+
+    try {
+      for (const st of statuses) {
+        const q = '{ getCustomerProspectFromCustomers(first: 30, where: { prospectStatus: { eq: ' + st + ' } }) { nodes { id prospectNumber name prospectStatus } } }';
+        const d = callStar(q);
+        const nodes = d.getCustomerProspectFromCustomers.nodes;
+        counts[st] = nodes.length;
+        totalCount += nodes.length;
+        if (previewNodes.length < 5) previewNodes.push(...nodes);
+      }
+    } catch (e) {
+      return editMsg(chatId, msgId, `❌ Gagal fetch prospects: ${e.message}`, backBtn('notdeal:menu'));
+    }
+
+    if (totalCount === 0) {
+      return editMsg(chatId, msgId,
+        `❌ Tidak ada prospek *${statusLabel}* untuk di-update.`,
+        backBtn('notdeal:menu'));
+    }
+
+    let preview = `🚫 *Preview Bulk Not Deal*\\n\\n`;
+    preview += `Reason : *${reason}*\\n`;
+    preview += `Status : *${statusLabel}*\\n`;
+    preview += `Total  : *${totalCount}* prospects\\n\\n`;
+    preview += `📋 Sample prospects:\\n`;
+    for (const p of previewNodes.slice(0, 5)) {
+      preview += `  • ${p.prospectNumber} | ${p.name} (${p.prospectStatus})\\n`;
+    }
+    preview += `\\n⚠️ SEMUA prospects di atas akan menjadi *LOST*.\\n`;
+    preview += `Proses ini TIDAK bisa di-undo.\\n\\n`;
+    preview += `Ketik *YA* untuk konfirmasi, atau batal.`;
+
+    conv.set(chatId, { ...s, step: 'notdeal_confirm' });
+    return editMsg(chatId, msgId, preview, {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '✅ YA, PROSES SEKARANG', callback_data: 'notdeal:do' }],
+          [{ text: '⬅️ Batal', callback_data: 'cancel' }],
+        ]
+      }
+    });
+  }
+
+  // --- NOT DEAL: EXECUTE ---
+  if (data === 'notdeal:do') {
+    const s = conv.get(chatId) || {};
+    if (!s.notdeal_reason) return editMsg(chatId, msgId, '❌ Session expired.', mainMenu);
+
+    const reason = s.notdeal_reason;
+    const targetStatus = s.notdeal_status;
+    const statuses = targetStatus === 'ALL' ? ['HOT', 'MEDIUM', 'LOW'] : [targetStatus];
+    const statusLabel = targetStatus === 'ALL' ? 'HOT + MEDIUM + LOW' : targetStatus;
+
+    await bot.answerCallbackQuery(q.id, { text: '⏳ Memproses...' });
+
+    const MUT_ND = `mutation UpdateNotDeal($id: ID!, $reason: String!) { ensureUpdateCustomerProspectStatusFromCustomers(input: {customerProspectId: $id, prospectStatus: LOST, reasonNotDeal: $reason}) { id prospectStatus } }`;
+
+    let totalOk = 0, totalFail = 0, totalSkipped = 0;
+    const failedList = [];
+
+    for (const st of statuses) {
+      let page = 0;
+      let hasMore = true;
+
+      while (hasMore) {
+        try {
+          const q = '{ getCustomerProspectFromCustomers(first: 25, where: { prospectStatus: { eq: ' + st + ' } }) { nodes { id prospectNumber name prospectStatus } } }';
+          const d = callStar(q);
+          const nodes = d.getCustomerProspectFromCustomers.nodes;
+
+          if (nodes.length === 0) { hasMore = false; break; }
+
+          for (const p of nodes) {
+            if (p.prospectStatus === 'LOST' || p.prospectStatus === 'DEAL') {
+              totalSkipped++; continue;
+            }
+            try {
+              callStar(MUT_ND, { id: p.id, reason });
+              totalOk++;
+            } catch (e) {
+              totalFail++;
+              if (failedList.length < 5) failedList.push(`${p.name}: ${e.message}`);
+            }
+            // Small delay to avoid rate limit
+            await new Promise(r => setTimeout(r, 150));
+          }
+
+          if (nodes.length < 25) { hasMore = false; break; }
+          page++;
+        } catch (e) {
+          return editMsg(chatId, msgId, `❌ Error fetch ${st}: ${e.message}`, mainMenu);
+        }
+      }
+    }
+
+    conv.delete(chatId);
+
+    let resultTxt = `🚫 *Bulk Not Deal Selesai*\\n\\n`;
+    resultTxt += `Reason : *${reason}*\\n`;
+    resultTxt += `Status : *${statusLabel}*\\n\\n`;
+    resultTxt += `✅ OK      : ${totalOk}\\n`;
+    resultTxt += `⏭️ Skip    : ${totalSkipped}\\n`;
+    resultTxt += `❌ Gagal   : ${totalFail}\\n`;
+    if (failedList.length > 0) {
+      resultTxt += `\\n⚠️ Gagal detail:\\n`;
+      for (const f of failedList) resultTxt += `  • ${f}\\n`;
+    }
+    return bot.sendMessage(chatId, resultTxt, { parse_mode: 'Markdown', ...mainMenu });
   }
 });
 
