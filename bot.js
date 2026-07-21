@@ -15,9 +15,15 @@ const STATE_FILE = path.join(__dirname, 'state.json');
 let jwt = '';
 try { jwt = fs.readFileSync(JWT_FILE, 'utf8').trim(); } catch {}
 
-// Saskia UUID (c2e2ec6814d94fee912a1609870afc3e → c2e2ec68-14d9-4fee-912a-1609870afc3e)
-// Used ONLY for Bulk Not Deal filter — does NOT affect createprospek / FF/Excel
-const SASKIA_UUID = 'c2e2ec68-14d9-4fee-912a-1609870afc3e';
+// Decode UUID from JWT sub claim (used ONLY for Bulk Not Deal filter)
+// Does NOT affect createprospek / FF/Excel / other mutations
+function decodeJwtUuid(token) {
+  try {
+    const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString('utf8'));
+    return payload.sub || null;
+  } catch { return null; }
+}
+const JWT_UUID = decodeJwtUuid(jwt) || '';
 
 // ====== STAR API ======
 const STAR_API = 'https://api.star.astra.co.id/graphql/';
@@ -984,7 +990,7 @@ bot.on('callback_query', async (q) => {
 
     try {
       for (const st of statuses) {
-        const q = '{ getCustomerProspectFromCustomers(first: 10, where: { prospectNumber: { startsWith: "H704-PRS" }, prospectStatus: { eq: ' + st + ' }, createdBy: { eq: "' + SASKIA_UUID + '" }, created: { gte: "2026-07-01T00:00:00Z", lte: "2026-07-31T23:59:59Z" } }) { nodes { id prospectNumber name prospectStatus } pageInfo { hasNextPage } } }';
+        const q = '{ getCustomerProspectFromCustomers(first: 10, where: { prospectNumber: { startsWith: "H704-PRS" }, prospectStatus: { eq: ' + st + ' }, createdBy: { eq: "' + JWT_UUID + '" }, created: { gte: "2026-07-01T00:00:00Z", lte: "2026-07-31T23:59:59Z" } }) { nodes { id prospectNumber name prospectStatus } pageInfo { hasNextPage } } }';
         const d = callStar(q);
         const nodes = d.getCustomerProspectFromCustomers.nodes;
         counts[st] = nodes.length;
@@ -1048,7 +1054,7 @@ bot.on('callback_query', async (q) => {
       while (hasMore) {
         try {
           const cursorArg = after ? `, after: "${after}"` : '';
-          const q = '{ getCustomerProspectFromCustomers(first: 10' + cursorArg + ', where: { prospectNumber: { startsWith: "H704-PRS" }, prospectStatus: { eq: ' + st + ' }, createdBy: { eq: "' + SASKIA_UUID + '" }, created: { gte: "2026-07-01T00:00:00Z", lte: "2026-07-31T23:59:59Z" } }) { nodes { id prospectNumber name prospectStatus } pageInfo { hasNextPage endCursor } } }';
+          const q = '{ getCustomerProspectFromCustomers(first: 10' + cursorArg + ', where: { prospectNumber: { startsWith: "H704-PRS" }, prospectStatus: { eq: ' + st + ' }, createdBy: { eq: "' + JWT_UUID + '" }, created: { gte: "2026-07-01T00:00:00Z", lte: "2026-07-31T23:59:59Z" } }) { nodes { id prospectNumber name prospectStatus } pageInfo { hasNextPage endCursor } } }';
           const d = callStar(q);
           const nodes = d.getCustomerProspectFromCustomers.nodes;
           const pi = d.getCustomerProspectFromCustomers.pageInfo;
