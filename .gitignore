@@ -3,7 +3,11 @@ node_modules/
 jwt.txt
 jwt-saskia.txt
 jwt-reski.txt
+jwt-h704.txt
+jwt-h705.txt
+star-vault.json
 state.json
+logs/
 tg_token.txt
 test-count.js
 *.log

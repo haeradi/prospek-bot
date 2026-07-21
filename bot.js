@@ -6,6 +6,7 @@ const path = require('path');
 const XLSX = require('xlsx');
 const { getOccupationHso } = require('./occupation-map');
 const { getMotorList, validateMotorCode } = require('./motor-map');
+const VAULT = require('./vault-manager');
 
 // ====== CONFIG ======
 const TG_TOKEN = process.env.TG_TOKEN || fs.readFileSync(path.join(__dirname, 'tg_token.txt'), 'utf8').trim();
@@ -226,7 +227,7 @@ const mainMenu = {
       [{ text: '📊 FF / Excel', callback_data: 'ff:menu' },
        { text: '🔑 Set JWT', callback_data: 'setjwt' }],
       [{ text: '🚫 Bulk Not Deal', callback_data: 'notdeal:menu' },
-       { text: 'ℹ️ Status', callback_data: 'status' }],
+       { text: '🔐 Akun', callback_data: 'accounts:menu' }],
     ]
   }
 };
@@ -528,9 +529,124 @@ bot.onText(/^\/jwt\s+(.+)/, async (msg, match) => {
     mainMenu);
 });
 
-// /status
-bot.onText(/^\/status/, async (msg) => {
-  await bot.sendMessage(msg.chat.id, jwtInfo(), { parse_mode: 'Markdown' });
+// /accounts — list all vault accounts with JWT status
+bot.onText(/^\/accounts/, async (msg) => {
+  const accounts = VAULT.listAccounts();
+  let txt = `🔐 *Star API Accounts*\\n\\n`;
+  const activeJwt = fs.readFileSync(JWT_FILE, 'utf8').trim();
+  const activeExp = VAULT.decodeJwtExp(activeJwt) || 0;
+  const activeExpStr = activeExp > 0
+    ? new Date(activeExp * 1000).toLocaleString('id-ID', {timeZone:'Asia/Makassar',hour12:false})
+    : 'unknown';
+
+  for (const a of accounts) {
+    const st = VAULT.jwtStatus(a.code);
+    const isActive = st.expiresAt && activeExpStr !== 'unknown' && activeExp > 0;
+    const activeMark = '';
+    txt += `${activeMark}\`${a.code}\` — ${a.email}\\n`;
+    txt += `  ├ Dealer : ${a.dealerName}\\n`;
+    if (st.jwtExists) {
+      const badge = st.status === 'valid' ? '✅' : st.status === 'expiring_soon' ? '⚠️' : '❌';
+      txt += `  └ ${badge} JWT: *${st.remainingStr}* (${badge !== '✅' ? '⚠️ ' : ''}exp ${st.expiresAt ? new Date(st.expiresAt).toLocaleString('id-ID',{timeZone:'Asia/Makassar',hour12:false}) : '?'})\\n`;
+    } else {
+      txt += `  └ ❌ JWT: *belum ada* (pakai \`/relogin ${a.code}\`)\\n`;
+    }
+    txt += `\\n`;
+  }
+  txt += `Active JWT exp: *${activeExpStr}*\\n\\n`;
+  txt += `Commands:\\n`;
+  txt += `\`/accounts\`   — list semua akun\\n`;
+  txt += `\`/relogin <CODE>\` — login ulang (Playwright+MFA)\\n`;
+  txt += `\`/use <CODE>\`  — switch JWT aktif`;
+
+  await bot.sendMessage(msg.chat.id, txt, { parse_mode: 'Markdown' });
+});
+
+// /relogin — trigger Playwright OIDC login for specified account
+bot.onText(/^\/relogin\s+(\S+)/, async (msg, match) => {
+  const code = match[1].toUpperCase();
+  const acct = VAULT.getAccount(code);
+  if (!acct) return bot.sendMessage(msg.chat.id, `❌ Akun \`${code}\` tidak ditemukan.\\nCek dengan \`/accounts\`.`, { parse_mode: 'Markdown' });
+  if (!acct.password || acct.password === 'NEED_PASSWORD') {
+    return bot.sendMessage(msg.chat.id,
+      `❌ Password untuk \`${code}\` belum di-set.\\n\\n` +
+      `Vault: ${VAULT.VAULT_FILE}\\n\\n` +
+      `Password di-vault.json, atau ketik \`/setpw ${code} <password>\` untuk update via bot.`,
+      { parse_mode: 'Markdown' }
+    );
+  }
+  await bot.sendMessage(msg.chat.id,
+    `🔄 *Login Star [${code}]*
+
+Sedang proses login...
+
+` +
+    `Password: ✅ (dari vault)
+` +
+    `Method   : Playwright + MFA push
+` +
+    `_estimasi: 30-60 detik
+
+` +
+    `Akan kirim notifikasi ke chat ini saat MFA diperlukan.`,
+    { parse_mode: 'Markdown' }
+  );
+  try {
+    const { spawn } = require('child_process');
+    const loginPath = path.join(__dirname, 'login-star.js');
+    const child = spawn('node', [loginPath, code, '--chat-id', msg.chat.id.toString()], {
+      cwd: __dirname,
+      detached: true,
+      stdio: 'ignore',
+    });
+    child.unref();
+    console.log(`[/relogin] Started login-star.js for ${code}, pid=${child.pid}`);
+  } catch (e) {
+    await bot.sendMessage(msg.chat.id, `❌ Gagal jalankan login: ${e.message}`);
+  }
+});
+
+// /setpw — update password in vault
+bot.onText(/^\/setpw\s+(\S+)\s+(.+)/, async (msg, match) => {
+  const code = match[1].toUpperCase();
+  const password = match[2];
+  const acct = VAULT.getAccount(code);
+  if (!acct) return bot.sendMessage(msg.chat.id, `❌ Akun \`${code}\` tidak ditemukan.`, { parse_mode: 'Markdown' });
+  try {
+    const fs2 = require('fs');
+    const vaultPath = VAULT.VAULT_FILE;
+    const vault = JSON.parse(fs2.readFileSync(vaultPath, 'utf8'));
+    vault[code].password = password;
+    vault[code].updatedAt = new Date().toISOString();
+    fs2.writeFileSync(vaultPath, JSON.stringify(vault, null, 2));
+    await bot.sendMessage(msg.chat.id, `✅ Password untuk \`${code}\` tersimpan di vault.
+
+Sekarang bisa pakai \`/relogin ${code}\` untuk refresh JWT.`, { parse_mode: 'Markdown' });
+  } catch (e) {
+    await bot.sendMessage(msg.chat.id, `❌ Gagal simpan password: ${e.message}`);
+  }
+});
+
+// /use — switch active JWT
+bot.onText(/^\/use\s+(\S+)/, async (msg, match) => {
+  const code = match[1].toUpperCase();
+  try {
+    const main = VAULT.setActiveAccount(code);
+    const st = VAULT.jwtStatus(code);
+    const expStr = st.expiresAt ? new Date(st.expiresAt).toLocaleString('id-ID', {timeZone:'Asia/Makassar',hour12:false}) : '?';
+    await bot.sendMessage(msg.chat.id,
+      `✅ JWT \`${code}\` jadi aktif.
+
+File   : ${main}
+Expires: ${expStr}`,
+      { parse_mode: 'Markdown' }
+    );
+    // Restart bot to reload JWT
+    await bot.sendMessage(msg.chat.id, `🔄 Merestart bot untuk load JWT baru...`, { parse_mode: 'Markdown' });
+    setTimeout(() => { require('child_process').execSync('systemctl --user restart prospek-bot'); }, 1500);
+  } catch (e) {
+    await bot.sendMessage(msg.chat.id, `❌ Gagal switch: ${e.message}`, { parse_mode: 'Markdown' });
+  }
 });
 
 // ====== CALLBACK QUERIES ======
@@ -540,6 +656,123 @@ bot.on('callback_query', async (q) => {
   const data = q.data;
   const c = convGet(chatId) || {};
   await bot.answerCallbackQuery(q.id);
+
+  // --- ACCOUNTS MENU ---
+  if (data === 'accounts:menu') {
+    const accounts = VAULT.listAccounts();
+    let txt = `🔐 *Star API Accounts*\\n\\n`;
+    const activeJwt = fs.readFileSync(JWT_FILE, 'utf8').trim();
+    const activeExp = VAULT.decodeJwtExp(activeJwt) || 0;
+
+    for (const a of accounts) {
+      const st = VAULT.jwtStatus(a.code);
+      const isActive = (st.expiresAt && activeExp > 0);
+      const badge = !st.jwtExists ? '❌' : st.status === 'valid' ? '✅' : '⚠️';
+      txt += `${badge} \`${a.code}\` — ${a.email}\\n`;
+      txt += `   Dealer : ${a.dealerName}\\n`;
+      if (st.jwtExists) {
+        const expStr = st.expiresAt ? new Date(st.expiresAt).toLocaleString('id-ID',{timeZone:'Asia/Makassar',hour12:false}) : '?';
+        txt += `   JWT    : *${st.remainingStr}* (${expStr})
+`;
+      } else {
+        txt += `   JWT    : *belum ada*
+`;
+      }
+      txt += `\\n`;
+    }
+
+    // Build inline buttons for each account
+    const rows = [];
+    for (const a of accounts) {
+      const st = VAULT.jwtStatus(a.code);
+      rows.push([
+        { text: `🔑 ${a.code}`, callback_data: `accounts:use:${a.code}` },
+        { text: `🔄 Relogin`, callback_data: `accounts:relogin:${a.code}` },
+      ]);
+    }
+    rows.push([{ text: '📋 Help Akun', callback_data: 'accounts:help' }]);
+
+    return editMsg(chatId, msgId, txt, {
+      parse_mode: 'Markdown',
+      reply_markup: { inline_keyboard: rows }
+    });
+  }
+
+  // accounts:use:X → switch active JWT
+  if (data.startsWith('accounts:use:')) {
+    const code = data.split(':')[2];
+    try {
+      const main = VAULT.setActiveAccount(code);
+      const st = VAULT.jwtStatus(code);
+      const expStr = st.expiresAt ? new Date(st.expiresAt).toLocaleString('id-ID',{timeZone:'Asia/Makassar',hour12:false}) : '?';
+      await bot.sendMessage(chatId, `✅ JWT \`${code}\` aktif.
+Expires: ${expStr}`, { parse_mode: 'Markdown' });
+      // Reload jwt variable
+      jwt = fs.readFileSync(JWT_FILE, 'utf8').trim();
+      await bot.sendMessage(chatId, '👋 *Menu Utama*', { parse_mode: 'Markdown', ...mainMenu });
+    } catch (e) {
+      await editMsg(chatId, msgId, `❌ Gagal switch: ${e.message}`, mainMenu);
+    }
+    return;
+  }
+
+  // accounts:relogin:X → trigger login
+  if (data.startsWith('accounts:relogin:')) {
+    const code = data.split(':')[2];
+    const acct = VAULT.getAccount(code);
+    if (!acct || !acct.password || acct.password === 'NEED_PASSWORD') {
+      return editMsg(chatId, msgId,
+        `❌ Password untuk \`${code}\` belum di-set.
+
+Ketik di chat:
+/setpw ${code} <password>
+
+Setelah itu klik Relogin lagi.`,
+        { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [[{text:'⬅️ Kembali', callback_data:'accounts:menu'}]] } }
+      );
+    }
+    await editMsg(chatId, msgId,
+      `🔄 *Login Star [${code}]*
+
+Sedang proses login...
+_estimasi: 30-60 detik.
+
+Akan kirim notifikasi saat MFA diperlukan.`,
+      { parse_mode: 'Markdown' }
+    );
+    try {
+      const { spawn } = require('child_process');
+      const loginPath = path.join(__dirname, 'login-star.js');
+      const child = spawn('node', [loginPath, code, '--chat-id', chatId.toString()], {
+        cwd: __dirname, detached: true, stdio: 'ignore',
+      });
+      child.unref();
+      console.log(`[/accounts:relogin] Started login-star.js for ${code}`);
+    } catch (e) {
+      await bot.sendMessage(chatId, `❌ Gagal jalankan login: ${e.message}`);
+    }
+    return;
+  }
+
+  // accounts:help
+  if (data === 'accounts:help') {
+    return editMsg(chatId, msgId,
+      `🔐 *Help — Account Management*
+
+` +
+      `\`/accounts\`  — list semua akun
+` +
+      `\`/relogin <CODE>\` — login ulang via browser
+` +
+      `\`/setpw <CODE> <password>\` — update password vault
+` +
+      `\`/use <CODE>\`  — switch JWT aktif
+
+` +
+      `Vault file: ${VAULT.VAULT_FILE}`,
+      { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [[{text:'⬅️ Kembali', callback_data:'accounts:menu'}]] } }
+    );
+  }
 
   // --- CANCEL ---
   if (data === 'cancel') {
