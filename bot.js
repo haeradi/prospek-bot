@@ -15,6 +15,10 @@ const STATE_FILE = path.join(__dirname, 'state.json');
 let jwt = '';
 try { jwt = fs.readFileSync(JWT_FILE, 'utf8').trim(); } catch {}
 
+// Saskia UUID (c2e2ec6814d94fee912a1609870afc3e → c2e2ec68-14d9-4fee-912a-1609870afc3e)
+// Used ONLY for Bulk Not Deal filter — does NOT affect createprospek / FF/Excel
+const SASKIA_UUID = 'c2e2ec68-14d9-4fee-912a-1609870afc3e';
+
 // ====== STAR API ======
 const STAR_API = 'https://api.star.astra.co.id/graphql/';
 const ORIGIN   = 'https://assist.star.astra.co.id';
@@ -980,7 +984,7 @@ bot.on('callback_query', async (q) => {
 
     try {
       for (const st of statuses) {
-        const q = '{ getCustomerProspectFromCustomers(first: 30, where: { prospectStatus: { eq: ' + st + ' } }) { nodes { id prospectNumber name prospectStatus } } }';
+        const q = '{ getCustomerProspectFromCustomers(first: 10, where: { prospectNumber: { startsWith: "H704-PRS" }, prospectStatus: { eq: ' + st + ' }, createdBy: { eq: "' + SASKIA_UUID + '" }, created: { gte: "2026-07-01T00:00:00Z", lte: "2026-07-31T23:59:59Z" } }) { nodes { id prospectNumber name prospectStatus } pageInfo { hasNextPage } } }';
         const d = callStar(q);
         const nodes = d.getCustomerProspectFromCustomers.nodes;
         counts[st] = nodes.length;
@@ -1038,14 +1042,16 @@ bot.on('callback_query', async (q) => {
     const failedList = [];
 
     for (const st of statuses) {
-      let page = 0;
+      let after = null;
       let hasMore = true;
 
       while (hasMore) {
         try {
-          const q = '{ getCustomerProspectFromCustomers(first: 25, where: { prospectStatus: { eq: ' + st + ' } }) { nodes { id prospectNumber name prospectStatus } } }';
+          const cursorArg = after ? `, after: "${after}"` : '';
+          const q = '{ getCustomerProspectFromCustomers(first: 10' + cursorArg + ', where: { prospectNumber: { startsWith: "H704-PRS" }, prospectStatus: { eq: ' + st + ' }, createdBy: { eq: "' + SASKIA_UUID + '" }, created: { gte: "2026-07-01T00:00:00Z", lte: "2026-07-31T23:59:59Z" } }) { nodes { id prospectNumber name prospectStatus } pageInfo { hasNextPage endCursor } } }';
           const d = callStar(q);
           const nodes = d.getCustomerProspectFromCustomers.nodes;
+          const pi = d.getCustomerProspectFromCustomers.pageInfo;
 
           if (nodes.length === 0) { hasMore = false; break; }
 
@@ -1061,11 +1067,13 @@ bot.on('callback_query', async (q) => {
               if (failedList.length < 5) failedList.push(`${p.name}: ${e.message}`);
             }
             // Small delay to avoid rate limit
-            await new Promise(r => setTimeout(r, 150));
+            await new Promise(r => setTimeout(r, 3000));
           }
 
-          if (nodes.length < 25) { hasMore = false; break; }
-          page++;
+          hasMore = pi.hasNextPage;
+          after = pi.endCursor;
+
+          if (!pi.hasNextPage) { hasMore = false; break; }
         } catch (e) {
           return editMsg(chatId, msgId, `❌ Error fetch ${st}: ${e.message}`, mainMenu);
         }
