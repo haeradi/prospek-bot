@@ -952,26 +952,12 @@ bot.on('callback_query', async (q) => {
 
   // --- NOT DEAL MENU ---
   if (data === 'notdeal:menu') {
-    conv.set(chatId, { step: 'notdeal_reason' });
+    conv.set(chatId, { step: 'notdeal_status' });
     return editMsg(chatId, msgId,
-      '🚫 *Bulk Not Deal*\\n\\n' +
-      'Pilih *REASON* untuk semua prospek:\\n' +
-      '(semua reason: TIDAK_BERMINAT, HARGA_MAHAL, SUDAH_PUNYA, dll.)\\n\\n' +
-      '📌 Reason dipilih dulu, baru status (HOT/MEDIUM/LOW/SEMUA)',
-      reasonKeyboard());
-  }
-
-  // --- NOT DEAL: REASON SELECTED ---
-  if (data.startsWith('notdeal:reason:')) {
-    const reason = data.split(':')[2];
-    if (!REASONS_NOT_DEAL.includes(reason)) return;
-    const s = conv.get(chatId) || {};
-    s.notdeal_reason = reason;
-    s.step = 'notdeal_status';
-    conv.set(chatId, s);
-    return editMsg(chatId, msgId,
-      `🚫 Reason: *${reason}*\\n\\n` +
-      `Sekarang pilih *STATUS* prospek yang ingin di-NOT DEAL-kan:`,
+      '🚫 *Bulk Not Deal*\n' +
+      'Reason : *TIDAK_BERMINAT*\n' +
+      '(auto-set, tidak bisa diubah)\n\n' +
+      'Pilih *STATUS* prospek yang ingin di-NOT DEAL-kan:',
       notdealStatusKeyboard());
   }
 
@@ -979,11 +965,11 @@ bot.on('callback_query', async (q) => {
   if (data.startsWith('notdeal:status:')) {
     const targetStatus = data.split(':')[2]; // HOT, MEDIUM, LOW, or ALL
     const s = conv.get(chatId) || {};
-    if (!s.notdeal_reason) return editMsg(chatId, msgId, '❌ Session expired. Mulai ulang.', mainMenu);
     s.notdeal_status = targetStatus;
+    s.notdeal_reason = 'TIDAK_BERMINAT'; // hardcoded
     conv.set(chatId, s);
 
-    const reason = s.notdeal_reason;
+    const reason = 'TIDAK_BERMINAT';
     const statusLabel = targetStatus === 'ALL' ? 'HOT + MEDIUM + LOW' : targetStatus;
 
     // Count prospects per status
@@ -1039,7 +1025,7 @@ bot.on('callback_query', async (q) => {
     const s = conv.get(chatId) || {};
     if (!s.notdeal_reason) return editMsg(chatId, msgId, '❌ Session expired.', mainMenu);
 
-    const reason = s.notdeal_reason;
+    const reason = 'TIDAK_BERMINAT';
     const targetStatus = s.notdeal_status;
     const statuses = targetStatus === 'ALL' ? ['HOT', 'MEDIUM', 'LOW'] : [targetStatus];
     const statusLabel = targetStatus === 'ALL' ? 'HOT + MEDIUM + LOW' : targetStatus;
