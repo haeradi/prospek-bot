@@ -994,15 +994,14 @@ bot.on('callback_query', async (q) => {
     const reason = 'TIDAK_BERMINAT';
     const statusLabel = targetStatus === 'ALL' ? 'HOT + MEDIUM + LOW' : targetStatus;
 
-    // Count prospects per status via paginated fetch (first:10, same as execute — S0001-safe)
+    // Collect ALL prospect names per status (paginated, S0001-safe)
     const statuses = targetStatus === 'ALL' ? ['HOT', 'MEDIUM', 'LOW'] : [targetStatus];
     const counts = {};
+    const allNames = { HOT: [], MEDIUM: [], LOW: [] };
     let totalCount = 0;
-    let previewNodes = [];
 
     try {
       for (const st of statuses) {
-        let count = 0;
         let after = null;
         let hasMore = true;
         while (hasMore) {
@@ -1011,14 +1010,13 @@ bot.on('callback_query', async (q) => {
           const d = callStar(q);
           const nodes = d.getCustomerProspectFromCustomers.nodes;
           const pi = d.getCustomerProspectFromCustomers.pageInfo;
-          count += nodes.length;
-          if (previewNodes.length < 5) previewNodes.push(...nodes);
+          counts[st] = (counts[st] || 0) + nodes.length;
+          totalCount += nodes.length;
+          allNames[st].push(...nodes.map(n => n.name));
           hasMore = pi.hasNextPage;
           after = pi.endCursor;
           if (hasMore) await new Promise(r => setTimeout(r, 2000));
         }
-        counts[st] = count;
-        totalCount += count;
       }
     } catch (e) {
       return editMsg(chatId, msgId, `❌ Gagal fetch prospects: ${e.message}`, backBtn('notdeal:menu'));
@@ -1030,19 +1028,43 @@ bot.on('callback_query', async (q) => {
         backBtn('notdeal:menu'));
     }
 
+    // Build preview with names grouped by status
     let preview = `🚫 *Preview Bulk Not Deal*\\n\\n`;
     preview += `Reason : *${reason}*\\n`;
     preview += `Total  : *${totalCount}* prospects\\n`;
     if (targetStatus === 'ALL') {
-      preview += `  ├ HOT    : *${counts.HOT || 0}*\\n`;
-      preview += `  ├ MEDIUM : *${counts.MEDIUM || 0}*\\n`;
-      preview += `  └ LOW    : *${counts.LOW || 0}*\\n`;
+      preview += `  ├ 🔥 HOT    : *${counts.HOT || 0}*\\n`;
+      preview += `  ├ 🟡 MEDIUM : *${counts.MEDIUM || 0}*\\n`;
+      preview += `  └ 🟢 LOW    : *${counts.LOW || 0}*\\n`;
     } else {
       preview += `  └ Status : *${statusLabel}*\\n`;
     }
-    preview += `\\n⚠️ SEMUA prospek akan menjadi *LOST*.\\n`;
+    preview += `\\n─────────────────────`;
+    if (targetStatus === 'ALL' || targetStatus === 'HOT') {
+      if (allNames.HOT.length > 0) {
+        preview += `\\n🔥 HOT (*${allNames.HOT.length}*)`;
+        for (const n of allNames.HOT) preview += `\\n  ▸ ${n}`;
+      }
+    }
+    if (targetStatus === 'ALL' || targetStatus === 'MEDIUM') {
+      if (allNames.MEDIUM.length > 0) {
+        preview += `\\n🟡 MEDIUM (*${allNames.MEDIUM.length}*)`;
+        for (const n of allNames.MEDIUM) preview += `\\n  ▸ ${n}`;
+      }
+    }
+    if (targetStatus === 'ALL' || targetStatus === 'LOW') {
+      if (allNames.LOW.length > 0) {
+        preview += `\\n🟢 LOW (*${allNames.LOW.length}*)`;
+        for (const n of allNames.LOW) preview += `\\n  ▸ ${n}`;
+      }
+    }
+    preview += `\\n─────────────────────\\n`;
+    preview += `⚠️ SEMUA prospek akan menjadi *LOST*.\\n`;
     preview += `Proses ini TIDAK bisa di-undo.\\n\\n`;
     preview += `Ketik *YA* untuk konfirmasi, atau *BATAL*.`;
+
+    // Save allNames to session so execute can reuse for result report
+    convSet(chatId, { ...s, step: 'notdeal_confirm', _ndNames: allNames, _ndCounts: counts, _ndTotal: totalCount });
 
     convSet(chatId, { ...s, step: 'notdeal_confirm' });
     return editMsg(chatId, msgId, preview, {
@@ -1064,8 +1086,10 @@ bot.on('callback_query', async (q) => {
     const targetStatus = s.notdeal_status;
     const statuses = targetStatus === 'ALL' ? ['HOT', 'MEDIUM', 'LOW'] : [targetStatus];
     const statusLabel = targetStatus === 'ALL' ? 'HOT + MEDIUM + LOW' : targetStatus;
+    const allNames = s._ndNames || { HOT: [], MEDIUM: [], LOW: [] };
+    const counts = s._ndCounts || {};
 
-    await bot.answerCallbackQuery(q.id, { text: '⏳ Memproses...' });
+    await bot.answerCallbackQuery(q.id, { text: '⏳ Memproses... Processing...' });
 
     const MUT_ND = `mutation UpdateStatus($data: UpdateCustomerProspectStatusInputFromCustomers!) {
       ensureUpdateCustomerProspectStatusFromCustomers(input: $data) { id name prospectStatus }
@@ -1073,6 +1097,7 @@ bot.on('callback_query', async (q) => {
 
     let totalOk = 0, totalFail = 0, totalSkipped = 0;
     const failedList = [];
+    const okHot = [], okMed = [], okLow = [];
 
     for (const st of statuses) {
       let after = null;
@@ -1095,11 +1120,13 @@ bot.on('callback_query', async (q) => {
             try {
               callStar(MUT_ND, { data: { customerProspectId: p.id, prospectStatus: 'LOST', reasonNotDeal: reason } });
               totalOk++;
+              if (st === 'HOT') okHot.push(p.name);
+              else if (st === 'MEDIUM') okMed.push(p.name);
+              else okLow.push(p.name);
             } catch (e) {
               totalFail++;
               if (failedList.length < 5) failedList.push(`${p.name}: ${e.message}`);
             }
-            // Small delay to avoid rate limit
             await new Promise(r => setTimeout(r, 3000));
           }
 
@@ -1115,16 +1142,33 @@ bot.on('callback_query', async (q) => {
 
     conv.delete(chatId);
 
-    let resultTxt = `🚫 *Bulk Not Deal Selesai*\\n\\n`;
+    let resultTxt = `✅ *Bulk Not Deal — SELESAI*\\n\\n`;
     resultTxt += `Reason : *${reason}*\\n`;
-    resultTxt += `Status : *${statusLabel}*\\n\\n`;
-    resultTxt += `✅ OK      : ${totalOk}\\n`;
-    resultTxt += `⏭️ Skip    : ${totalSkipped}\\n`;
-    resultTxt += `❌ Gagal   : ${totalFail}\\n`;
-    if (failedList.length > 0) {
-      resultTxt += `\\n⚠️ Gagal detail:\\n`;
-      for (const f of failedList) resultTxt += `  • ${f}\\n`;
+    resultTxt += `─────────────────────\\n`;
+    resultTxt += `✅ OK      : *${totalOk}*\\n`;
+    if (totalSkipped > 0) resultTxt += `⏭️ Skip    : *${totalSkipped}*\\n`;
+    if (totalFail > 0) resultTxt += `❌ Gagal   : *${totalFail}*\\n`;
+    resultTxt += `─────────────────────`;
+
+    if (okHot.length > 0) {
+      resultTxt += `\\n🔥 HOT → LOST (*${okHot.length}*)`;
+      for (const n of okHot) resultTxt += `\\n  ▸ ${n}`;
     }
+    if (okMed.length > 0) {
+      resultTxt += `\\n🟡 MEDIUM → LOST (*${okMed.length}*)`;
+      for (const n of okMed) resultTxt += `\\n  ▸ ${n}`;
+    }
+    if (okLow.length > 0) {
+      resultTxt += `\\n🟢 LOW → LOST (*${okLow.length}*)`;
+      for (const n of okLow) resultTxt += `\\n  ▸ ${n}`;
+    }
+    if (failedList.length > 0) {
+      resultTxt += `\\n─────────────────────\\n`;
+      resultTxt += `⚠️ Gagal (*${totalFail}*):\\n`;
+      for (const f of failedList) resultTxt += `  ▸ ${f}\\n`;
+    }
+    resultTxt += `\\n─────────────────────\\n`;
+    resultTxt += `_Diupdate oleh @Rd_prospek_bot_`;
     return bot.sendMessage(chatId, resultTxt, { parse_mode: 'Markdown', ...mainMenu });
   }
 });
