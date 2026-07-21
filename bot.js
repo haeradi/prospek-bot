@@ -36,7 +36,7 @@ const callStar = (query, vars) => {
   const escaped = body.replace(/'/g, "'\\''");
   const cmd = `curl -s --max-time 30 '${STAR_API}' ` +
     `-H 'Authorization: Bearer ${jwt}' ` +
-    `-H 'Content-Type: application/json' ` +
+    `-H 'Content-Type: application/json; charset=utf-8' ` +
     `-H 'origin: ${ORIGIN}' ` +
     `-H 'referer: ${ORIGIN}/' ` +
     `-H 'user-agent: Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Mobile Safari/537.36' ` +
@@ -1054,7 +1054,9 @@ bot.on('callback_query', async (q) => {
 
     await bot.answerCallbackQuery(q.id, { text: '⏳ Memproses...' });
 
-    const MUT_ND = `mutation UpdateNotDeal($prospectId: String!, $reason: String!) { ensureUpdateCustomerProspectStatusFromCustomers(input: {customerProspectId: $prospectId, prospectStatus: LOST, reasonNotDeal: $reason}) { id name prospectStatus } }`;
+    const MUT_ND = `mutation UpdateStatus($data: UpdateCustomerProspectStatusInputFromCustomers!) {
+      ensureUpdateCustomerProspectStatusFromCustomers(input: $data) { id name prospectStatus }
+    }`;
 
     let totalOk = 0, totalFail = 0, totalSkipped = 0;
     const failedList = [];
@@ -1078,7 +1080,7 @@ bot.on('callback_query', async (q) => {
               totalSkipped++; continue;
             }
             try {
-              callStar(MUT_ND, { prospectId: p.id, reason });
+              callStar(MUT_ND, { data: { customerProspectId: p.id, prospectStatus: 'LOST', reasonNotDeal: reason } });
               totalOk++;
             } catch (e) {
               totalFail++;
