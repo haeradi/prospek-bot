@@ -143,6 +143,38 @@ async function runLogin() {
   await page.fill('input[type="password"]', account.password);
   await page.locator('input[type="submit"], button:has-text("Sign in")').first().click();
 
+  // ── Step 4b: "Verify your identity" — pilih metode Authenticator ─────────
+  // Microsoft kadang menampilkan halaman pilih metode MFA. Kalau tidak diklik,
+  // push TIDAK PERNAH dikirim ke HP → sales tidak dapat notif → timeout.
+  // Klik "Approve a request on my Microsoft Authenticator app" dulu.
+  await page.waitForTimeout(3000);
+  try {
+    const bodyTxt = await page.locator('body').innerText().catch(() => '');
+    if (/Verify your identity|Approve a request/i.test(bodyTxt)) {
+      updateStatus('login', `⏳ [${accountCode}] Pilih metode Authenticator...`);
+      const methodSelectors = [
+        'div[role="button"]:has-text("Approve a request on my Microsoft Authenticator")',
+        'div:has-text("Approve a request on my Microsoft Authenticator app")',
+        'a:has-text("Approve a request")',
+        '#idDiv_SAOTCS_Proofs > div:first-child',
+      ];
+      let clicked = false;
+      for (const sel of methodSelectors) {
+        try {
+          const loc = page.locator(sel).first();
+          if (await loc.isVisible({ timeout: 1500 })) {
+            await loc.click();
+            clicked = true;
+            updateStatus('login', `⏳ [${accountCode}] Kirim push ke Authenticator...`);
+            await page.waitForTimeout(3000);
+            break;
+          }
+        } catch {}
+      }
+      if (!clicked) updateStatus('login', `⏳ [${accountCode}] Metode MFA tidak perlu dipilih, lanjut...`);
+    }
+  } catch {}
+
   // ── Step 5: Wait for MFA ────────────────────────────────────────────────
   await page.waitForTimeout(3000);
 
