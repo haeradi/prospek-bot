@@ -1852,6 +1852,9 @@ bot.on('message', async (msg) => {
   if (!msg.text) return;
   const text = msg.text.trim();
   if (text.startsWith('/')) return; // commands handled above
+  // Skip Reply Keyboard button taps — handled by dedicated handler below
+  const MENU_BUTTONS = ['📋 Cari Prospek','📊 FF / Excel','🔄 JWT / Akun','👥 Akun Tersimpan','📋 Aktivitas','📊 Stock','⚙️ Upgrade','🔙 Menu Utama'];
+  if (MENU_BUTTONS.includes(text)) return;
   const chatId = msg.chat.id;
   const s = convGet(chatId);
   if (!s) return;
