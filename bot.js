@@ -2183,7 +2183,8 @@ bot.on('message', async (msg) => {
 });
 
 // ====== REPLY KEYBOARD HANDLER — routes tapped menu buttons to actions ======
-// Runs AFTER conversation handlers (convGet check) so it only catches free-tap buttons
+// Telegram Reply Keyboard tap arrives as plain text message
+// No callback_query is involved — handle by sending the same UI the callback would send
 bot.on('message', (msg) => {
   if (!msg.text) return;
   const text = msg.text.trim();
@@ -2193,16 +2194,69 @@ bot.on('message', (msg) => {
   // If user is in a conversation, let conversation handler deal with it
   if (s) return;
 
-  // Route Reply Keyboard button taps → callback action equivalent
-  if (text === '📝 Prospek LOW')        return bot.emit('callback_query', { id: 'rk', message: { chat: { id: chatId }, message_id: msg.message_id }, data: 'create:LOW' });
-  if (text === '📝 Prospek MEDIUM')     return bot.emit('callback_query', { id: 'rk', message: { chat: { id: chatId }, message_id: msg.message_id }, data: 'create:MEDIUM' });
-  if (text === '📝 Prospek HOT')        return bot.emit('callback_query', { id: 'rk', message: { chat: { id: chatId }, message_id: msg.message_id }, data: 'create:HOT' });
-  if (text === '⬆️ Upgrade Status')      return bot.emit('callback_query', { id: 'rk', message: { chat: { id: chatId }, message_id: msg.message_id }, data: 'upgrade:menu' });
-  if (text === '📋 Cari Prospek')       return bot.emit('callback_query', { id: 'rk', message: { chat: { id: chatId }, message_id: msg.message_id }, data: 'search:menu' });
-  if (text === '📊 FF / Excel')         return bot.emit('callback_query', { id: 'rk', message: { chat: { id: chatId }, message_id: msg.message_id }, data: 'ff:menu' });
-  if (text === '🔑 Set JWT')           return bot.emit('callback_query', { id: 'rk', message: { chat: { id: chatId }, message_id: msg.message_id }, data: 'setjwt' });
-  if (text === '🚫 Bulk Not Deal')     return bot.emit('callback_query', { id: 'rk', message: { chat: { id: chatId }, message_id: msg.message_id }, data: 'notdeal:menu' });
-  if (text === '🔐 Akun')              return bot.emit('callback_query', { id: 'rk', message: { chat: { id: chatId }, message_id: msg.message_id }, data: 'accounts:menu' });
+  // Route Reply Keyboard button taps → send same menu as callback would
+  if (text === '📝 Prospek LOW') {
+    convSet(chatId, { step: 'ask_name', level: 'LOW', data: {} });
+    return bot.sendMessage(chatId,
+      '📝 *Prospek LOW*\nField: Nama + HP + Asal\n\nSilakan masukkan **nama lengkap customer**:',
+      { parse_mode: 'Markdown', ...cancelBtn() }
+    );
+  }
+  if (text === '📝 Prospek MEDIUM') {
+    convSet(chatId, { step: 'ask_name', level: 'MEDIUM', data: {} });
+    return bot.sendMessage(chatId,
+      '📝 *Prospek MEDIUM*\nField: Nama + HP + Asal + Motor + Alamat\n\nSilakan masukkan **nama lengkap customer**:',
+      { parse_mode: 'Markdown', ...cancelBtn() }
+    );
+  }
+  if (text === '📝 Prospek HOT') {
+    convSet(chatId, { step: 'ask_name', level: 'HOT', data: {} });
+    return bot.sendMessage(chatId,
+      '📝 *Prospek HOT*\nField: Nama + HP + Asal + Motor + NIK + Alamat\n\nSilakan masukkan **nama lengkap customer**:',
+      { parse_mode: 'Markdown', ...cancelBtn() }
+    );
+  }
+  if (text === '⬆️ Upgrade Status') {
+    convSet(chatId, { step: 'upgrade_search' });
+    return bot.sendMessage(chatId,
+      '⬆️ *Upgrade Status Prospek*\n\nMasukkan nomor HP atau nama customer yang ingin di-upgrade:',
+      { parse_mode: 'Markdown', ...cancelBtn() }
+    );
+  }
+  if (text === '📋 Cari Prospek') {
+    convSet(chatId, { step: 'search' });
+    return bot.sendMessage(chatId,
+      '📋 *Cari Prospek*\n\nMasukkan nama atau nomor HP customer:',
+      { parse_mode: 'Markdown', ...cancelBtn() }
+    );
+  }
+  if (text === '📊 FF / Excel') {
+    convSet(chatId, { step: 'ff_input' });
+    return bot.sendMessage(chatId,
+      '📊 *FF / Excel Input*\n\nKirim data dalam format:\n\n```\nindividu NO NAMA LAKI-LAKI ALAMAT RT.00X KALIMANTAN TIMUR KABUPATEN PENAJAM ... KODEMOTOR\n```\n\nContoh:\n```\nindividu 3 AHMAD SAPAR LAKI-LAKI BULU MINUNG RT.001 KALIMANTAN TIMUR KABUPATEN PENAJAM PASER UTARA PENAJAM BULUMINUNG 001 000 LAKI-LAKI ISLAM LAIN-LAIN 081347313249 tidak kredit NE0B\n```\n\n💡 Kirim beberapa baris sekaligus untuk batch input!',
+      { parse_mode: 'Markdown', ...cancelBtn() }
+    );
+  }
+  if (text === '🔑 Set JWT') {
+    convSet(chatId, { step: 'wait_jwt' });
+    return bot.sendMessage(chatId,
+      '🔑 *Set JWT Token*\n\nKirim token JWT:\n`/jwt <token>`',
+      { parse_mode: 'Markdown', ...cancelBtn() }
+    );
+  }
+  if (text === '🚫 Bulk Not Deal') {
+    convSet(chatId, { step: 'notdeal_status' });
+    return bot.sendMessage(chatId,
+      '🚫 *Bulk Not Deal*\nReason : *TIDAK_BERMINAT*\n(auto-set, tidak bisa diubah)\n\nPilih *STATUS* prospek yang ingin di-NOT DEAL-kan:',
+      { parse_mode: 'Markdown', ...notdealStatusKeyboard() }
+    );
+  }
+  if (text === '🔐 Akun') {
+    const accounts = VAULT.listAccounts();
+    return bot.sendMessage(chatId, formatAccountsList(accounts),
+      { parse_mode: 'Markdown', ...buildAccountsMenuKeyboard(accounts) }
+    );
+  }
 });
 
 // ====== SHOW PREVIEW ======
