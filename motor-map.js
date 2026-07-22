@@ -1,108 +1,68 @@
-// Kode Motor Honda - Full description (verified 2026-07-17)
-// Format: "KODE-NAMA LENGKAP" (contoh: "LY2-BEAT ESP CBS ISS")
+// Kode Motor Honda — VERIFIED LIVE vs Star API katalog resmi (2026-07-22)
+// Sumber: getCustomerProspectFromCustomers → catalogueUnitDescription (read-back)
+// Format: "KODE": "NAMA LENGKAP" (catalogueUnitDescription = "KODE-NAMA")
+//
+// ⚠️ PENTING: Kode di sini HARUS sesuai katalog resmi Star API.
+// LY2 = GENIO (bukan BEAT) — API auto-expand LY2 → "LY2-GENIO CBS".
+// Kode 2026 aktif: LH2A, LJ2, LK2A, LN3B, LR1, LV1, LY1A, LZ1, dll.
 const MOTOR_MAP = {
-  // BEAT Series
-  "LY2":  "BEAT ESP CBS ISS",
-  "NF0B": "BEAT STREET CBS ISS",
-  "NE0B": "BEAT POP CBS ISS",
-  "NF0C": "BEAT STREET DELUXE CBS",
-  "NF0F": "BEAT DELUXE CBS",
-  "NF0K": "BEAT POP DELUXE CBS",
-  "NF0A": "BEAT STREET SPORTY CBS",
-  "NF08": "BEAT POP ESP",
+  // ── BEAT Series (kode 2026) ──
+  "LH2A": "BEAT SPORTY CBS PLUS",
+  "LK2A": "BEAT SPORTY CBS ISS DELUXE PLUS",
+  "LJ2":  "BEAT STREET",
 
-  // VARIO Series
-  "MFG":  "VARIO 125 CBS ISS",
-  "MFJ":  "VARIO 125 SP CBS ISS",
-  "MFC":  "VARIO 125 TECHNO CBS",
-  "MF2":  "VARIO 160 CBS ISS",
-  "MF3":  "VARIO 160 SP CBS ISS",
-  "MF1":  "VARIO 160 RC CBS",
-  "MF0":  "VARIO 160 RC CBS ISS",
+  // ── GENIO Series (kode 2026) ──
+  "LY1A": "GENIO CBS PLUS",
+  "LZ1":  "GENIO CBS ISS",
+  "LZ1A": "GENIO CBS ISS PLUS",
+  "LY2":  "GENIO CBS",   // ⚠️ LY2 = GENIO (bukan BEAT) — verified live Star API
 
-  // SCOOPY Series
-  "SFC":  "SCOOPY ESP CBS ISS",
-  "SFD":  "SCOOPY SP CBS ISS",
-  "SFJ":  "SCOOPY LUXURAL CBS",
-  "SFG":  "SCOOPY ESP PREMIUM",
+  // ── SCOOPY Series (kode 2026) ──
+  "LN3B": "SCOOPY SPORTY STEP FLOOR PLUS",
+  "LNJB": "SCOOPY FASHION STEP FLOOR PLUS",
+  "LP3B": "SCOOPY PRESTIGE STEP FLOOR PLUS",
+  "LPDB": "SCOOPY STYLISH STEP FLOOR PLUS",
 
-  // GENIO Series
-  "MHJ":  "GENIO CBS ISS",
-  "MHK":  "GENIO SP CBS ISS",
-  "MHL":  "GENIO LUXURAL CBS",
+  // ── VARIO Series (kode 2026) ──
+  "LV1":  "Vario 160 CBS",
 
-  // ADV Series
-  "ML2":  "ADV 160 CBS ISS",
-  "ML3":  "ADV 160 SP CBS ISS",
-  "ML1":  "ADV 160 RC CBS",
+  // ── PCX Series (kode 2026) ──
+  "LR1":  "PCX160 CBS",
 
-  // PCX Series
-  "MJD":  "PCX 160 CBS ISS",
-  "MJF":  "PCX 160 SP CBS ISS",
-  "MJL":  "PCX 160 LUXURAL CBS",
+  // ── REVO Series (kode 2026) ──
+  "GB4":  "REVO FIT",
+  "GD4":  "REVO X",
 
-  // CLICK Series
-  "MJV":  "CLICK 125 CBS",
-  "MJW":  "CLICK 125 SP CBS",
+  // ── CRF Series ──
+  "ESFB": "CRF150L PLUS",
 
-  // REVO Series
-  "KL2":  "REVO ABS",
-  "KL3":  "REVO CBS",
-  "KLC":  "REVO FIT",
+  // ── CB / BIG BIKE Series ──
+  "AW0":  "CB650R",
+  "JC1":  "CB500X",
+  "BB1":  "CMX 1100",
 
-  // SUPRA Series
-  "JF01": "SUPRA GTR 150",
-  "JF0":  "SUPRA X 125 FF",
-  "JF1":  "SUPRA X 125 FI",
-  "JF":   "SUPRA 125",
-
-  // CB Series
-  "MCT":  "CB 150 R",
-  "MC1":  "CB 150 R SP",
-  "K13":  "CB 150 VERZA",
-  "K14":  "CB 150 VERZA SP",
-
-  // CRF Series
-  "K09":  "CRF 150 L",
-  "K63":  "CRF 250 L",
-  "K75":  "CRF 250 Rally",
-
-  // MONKEY Series
-  "MK2":  "MONKEY",
-  "MK3":  "MONKEY SP",
-
-  // FORZA Series
-  "MGC":  "FORZA 250",
-  "MGE":  "FORZA 350",
-
-  // GOLDWING Series
-  "RH":   "GOLDWING 1800",
-
-  // DAX Series
-  "MKL":  "DAX 125 CBS",
-  "MKK":  "DAX 125 SP CBS",
-
-  // ACCESORIES / LAINNYA
+  // ── ACCESORIES / LAINNYA ──
   "TBA":  "TBA",
 };
 
-// Format kode motor valid: 2-4 karakter (huruf kapital + angka)
+// Format kode motor valid: 2-6 karakter (huruf kapital + angka)
 const MOTOR_CODE_REGEX = /^[A-Z0-9]{2,6}$/i;
 
 // Validasi kode motor
 const validateMotorCode = (code) => {
   const normalized = code.toUpperCase().trim();
-  
+
   // Cek apakah ada di list
   if (MOTOR_MAP[normalized]) {
     return { valid: true, code: normalized, name: MOTOR_MAP[normalized] };
   }
-  
+
   // Jika format valid tapi tidak ada di list, accept sebagai free text
+  // (Star API akan auto-expand jika kode dikenali di master katalog)
   if (MOTOR_CODE_REGEX.test(normalized)) {
     return { valid: true, code: normalized, name: normalized }; // return code as name
   }
-  
+
   return { valid: false };
 };
 

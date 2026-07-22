@@ -184,6 +184,8 @@ const ASAL_PROSPEK = {
   "9f": { id: "56d4a103-4aa6-4d48-88e1-7bba6cb95d77", name: "Instagram Live" },
   "9g": { id: "57d4a103-4aa6-4d48-88e1-7bba6cb95d77", name: "Twitter Comment/Message" },
   "10": { id: "59d4a103-4aa6-4d48-88e1-7bba6cb95d77", name: "Flyering" },
+  "12": { id: "5bd4a103-4aa6-4d48-88e1-7bba6cb95d77", name: "Mobile App MD/Dealer" },
+  "13": { id: "5cd4a103-4aa6-4d48-88e1-7bba6cb95d77", name: "Referral" },
   "55": { id: "82d4a103-4aa6-4d48-88e1-7bba6cb95d77", name: "Tiktok" },
 };
 
@@ -204,6 +206,8 @@ const asalKeyboard = () => ({
       [{ text: '9f. Instagram Live', callback_data: 'asal:9f' }],
       [{ text: '9g. Twitter Comment/Msg', callback_data: 'asal:9g' }],
       [{ text: '10. Flyering', callback_data: 'asal:10' }],
+      [{ text: '12. Mobile App MD/Dealer', callback_data: 'asal:12' }],
+      [{ text: '13. Referral', callback_data: 'asal:13' }],
       [{ text: '55. Tiktok', callback_data: 'asal:55' }],
       [{ text: '⬅️ Batal', callback_data: 'cancel' }],
     ]
@@ -214,8 +218,8 @@ const asalKeyboard = () => ({
 const motorKeyboard = () => {
   const motors = getMotorList();
   const keyboard = [];
-  // Tampilkan 4 motor terpopuler
-  const popular = ["LY2", "NF0B", "NE0B", "MF2", "MFG", "SFC"];
+  // Tampilkan motor terpopuler (kode 2026 — verified katalog Star API)
+  const popular = ["LH2A", "LJ2", "LY1A", "LZ1", "LN3B", "LV1"];
   for (let i = 0; i < popular.length; i += 2) {
     const row = [];
     if (popular[i]) row.push({ text: `${popular[i]}`, callback_data: `motor:${popular[i]}` });
@@ -1057,7 +1061,7 @@ bot.on('callback_query', async (q) => {
           occupation: d.pekerjaan,
           religion: d.agama,
           birthPlace: 'PENAJAM',
-          description: `FF/Excel - No.Urut: ${d.no}`,
+          description: '',
         };
 
         // WILAYAH only for MEDIUM/HOT — LOW tidak perlu alamat/provinsi/dsb
@@ -1107,13 +1111,11 @@ bot.on('callback_query', async (q) => {
         // Follow-up — WAJIB untuk semua level agar muncul di /follup
         try {
           let followUpResult = currentLevel;
-          let followUpDesc = 'FF/Excel - Minat motor, follow-up lanjut';
+          let followUpDesc = '';
           if (isLOW) {
             followUpResult = 'LOW';
-            followUpDesc = 'FF/Excel LOW - Kontak awal follow-up';
           } else if (isHOT) {
             followUpResult = 'HOT';
-            followUpDesc = 'FF/Excel HOT - NIK lengkap, ready follow-up';
           }
           await callStar(MUT_FOLLOWUP, {
             input: {
@@ -1247,7 +1249,7 @@ bot.on('callback_query', async (q) => {
     for (const m of motors) {
       txt += `• *${m.code}* - ${m.name}\n`;
     }
-    txt += `\nKetik kode motor (misal: LY2, Vario 125):`;
+    txt += `\nKetik kode motor (misal: LH2A, LY1A, Vario 160):`;
     convSet(chatId, { ...s, step: 'ask_motor_text' });
     return editMsg(chatId, msgId, txt, cancelBtn());
   }
@@ -2029,7 +2031,7 @@ bot.on('message', async (msg) => {
   if (s.step === 'ask_motor' || s.step === 'ask_motor_text') {
     const motor = validateMotorCode(text);
     if (!motor.valid) {
-      return bot.sendMessage(chatId, '❌ Kode motor tidak valid.\nGunakan format: LY2, MF2, Vario125, dll', cancelBtn());
+      return bot.sendMessage(chatId, '❌ Kode motor tidak valid.\nGunakan format: LH2A, LY1A, Vario160, dll', cancelBtn());
     }
     s.data.motorCode = motor.code;
     s.data.motorType = motor.name;
