@@ -2189,10 +2189,8 @@ bot.on('message', (msg) => {
   if (!msg.text) return;
   const text = msg.text.trim();
   const chatId = msg.chat.id;
-  const s = convGet(chatId);
-
-  // If user is in a conversation, let conversation handler deal with it
-  if (s) return;
+  // Always clear stale conversation state when user taps a menu button
+  conv.delete(chatId);
 
   // Route Reply Keyboard button taps → send same menu as callback would
   if (text === '📝 Prospek LOW') {
