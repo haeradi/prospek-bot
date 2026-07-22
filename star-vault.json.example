@@ -1,0 +1,16 @@
+// star-vault.json — credentials vault untuk multi-account Star API
+// isi password yang BENAR, contoh:
+{
+  "H704": {
+    "dealerName": "Astra Motor Penajam (H704)",
+    "email": "abdul.rahmadan@hso.astra.co.id",
+    "password": "ISI_PASSWORD_DISINI",
+    "createdAt": "2026-07-21T00:00:00Z"
+  },
+  "SASKIA": {
+    "dealerName": "Saskia Laprasta (543)",
+    "email": "saskia.laprasta@hso.astra.co.id",
+    "password": "ISI_PASSWORD_DISINI",
+    "createdAt": "2026-07-21T00:00:00Z"
+  }
+}

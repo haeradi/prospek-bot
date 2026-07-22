@@ -3,6 +3,7 @@
 const { TelegramBot } = require('node-telegram-bot-api');
 const fs = require('fs');
 const path = require('path');
+const SA = require('./star-activity'); // activities + clock-in/out from Star API
 const XLSX = require('xlsx');
 const { getOccupationHso } = require('./occupation-map');
 const { getMotorList, validateMotorCode } = require('./motor-map');
@@ -24,7 +25,11 @@ function decodeJwtUuid(token) {
     return payload.sub || null;
   } catch { return null; }
 }
-const JWT_UUID = decodeJwtUuid(jwt) || '';
+// Decode UUID from CURRENT active JWT sub claim (used for Bulk Not Deal filter)
+// Re-reads jwt each call so it stays correct after account switch (/use, accounts:use)
+function currentJwtUuid() {
+  return decodeJwtUuid(jwt) || '';
+}
 
 // ====== STAR API ======
 const STAR_API = 'https://api.star.astra.co.id/graphql/';
@@ -529,67 +534,163 @@ bot.onText(/^\/jwt\s+(.+)/, async (msg, match) => {
     mainMenu);
 });
 
-// /accounts — list all vault accounts with JWT status
+// ── Account group helpers ───────────────────────────────────────────────────────────
+const TEAM_GROUPS = {
+  'OWNER / UTAMA': ['H704'],
+  'BABULU':        ['SEPTHI', 'NURLELA'],
+  'SOTEK':         ['NORMAYANTI', 'RESKI'],
+  'GIRIMUKTI':     ['DESI', 'TIARA'],
+  'SEPAKU':        ['RANGA'],
+};
+
+// status emoji + label
+function _s(st) {
+  if (st.status === 'valid')           return { emoji: '🟢', label: `Aktif ${st.remainingStr}` };
+  if (st.status === 'expiring_soon')   return { emoji: '🟡', label: `Expiring ${st.remainingStr}` };
+  if (st.status === 'expired')         return { emoji: '🔴', label: 'Expired' };
+  if (st.status === 'no_jwt')         return { emoji: '⚪', label: 'Belum Login' };
+  return                                     { emoji: '❓', label: 'Unknown' };
+}
+
+function formatAccountsList(accounts) {
+  const activeCode = fs.existsSync(JWT_FILE)
+    ? (() => {
+        try {
+          const payload = JSON.parse(Buffer.from(fs.readFileSync(JWT_FILE,'utf8').trim().split('.')[1],'base64').toString('utf8'));
+          return payload.user_code || payload.name || '';
+        } catch { return ''; }
+      })()
+    : '';
+
+  const lines = [
+    '━━━━━━━━━━━━━━━━━━━━',
+    '  🔐  MANAJEMEN AKUN STAR API',
+    '━━━━━━━━━━━━━━━━━━━━',
+    `  📌 Active : ${activeCode || '—'}`,
+    ''
+  ];
+
+  for (const [grp, codes] of Object.entries(TEAM_GROUPS)) {
+    const members = accounts.filter(a => codes.includes(a.code));
+    if (!members.length) continue;
+    lines.push(`  ${'─'.repeat(26)}`);
+    lines.push(`  📂 ${grp}`);
+    for (const a of members) {
+      const st = VAULT.getJwtStatus(a.code);
+      const { emoji, label } = _s(st);
+      lines.push(`    ${emoji}  ${a.code.padEnd(12)} ${label}`);
+    }
+    lines.push('');
+  }
+
+  lines.push('  ┌──────────────────────────┐');
+  lines.push('  │  👆 Klik akun untuk detail  │');
+  lines.push('  └──────────────────────────┘');
+  return lines.join('\n');
+}
+
+function buildAccountsMenuKeyboard(accounts) {
+  const rows = [];
+  for (const [grp, codes] of Object.entries(TEAM_GROUPS)) {
+    const members = accounts.filter(a => codes.includes(a.code));
+    if (!members.length) continue;
+    rows.push([{ text: `▸ ${grp}`, callback_data: 'noop' }]);
+    for (const a of members) {
+      const st = VAULT.getJwtStatus(a.code);
+      const { emoji, label } = _s(st);
+      rows.push([{ text: `${emoji}  ${a.code}  ·  ${label}`, callback_data: `accounts:detail:${a.code}` }]);
+    }
+  }
+  rows.push([{ text: '───────────────────', callback_data: 'noop' }]);
+  rows.push([{ text: '➕ Tambah Akun', callback_data: 'accounts:add:start' }]);
+  rows.push([{ text: '🔙 Menu Utama',   callback_data: 'menu' }]);
+  return { reply_markup: { inline_keyboard: rows } };
+}
+
+function buildAccountDetailKeyboard(code) {
+  return {
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: '🔄 Relogin',   callback_data: `accounts:relogin:${code}` },
+         { text: '⚡ Pakai JWT', callback_data: `accounts:use:${code}` }],
+        [{ text: '✏️ Edit',  callback_data: `accounts:edit:${code}` },
+         { text: '🗑️ Hapus', callback_data: `accounts:delete:${code}` }],
+        [{ text: '⬅️ Kembali', callback_data: 'accounts:menu' }],
+      ]
+    }
+  };
+}
+
+function buildAccountEditKeyboard(code) {
+  return {
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: '✏️ Email',       callback_data: `accounts:edit_email:${code}` }],
+        [{ text: '🔑 Password',    callback_data: `accounts:edit_password:${code}` }],
+        [{ text: '🏪 Nama Dealer', callback_data: `accounts:edit_dealer:${code}` }],
+        [{ text: '⬅️ Kembali',    callback_data: `accounts:detail:${code}` }],
+      ]
+    }
+  };
+}
+
+// /accounts — list all vault accounts
 bot.onText(/^\/accounts/, async (msg) => {
   const accounts = VAULT.listAccounts();
-  let txt = `🔐 *Star API Accounts*\\n\\n`;
-  const activeJwt = fs.readFileSync(JWT_FILE, 'utf8').trim();
-  const activeExp = VAULT.decodeJwtExp(activeJwt) || 0;
-  const activeExpStr = activeExp > 0
-    ? new Date(activeExp * 1000).toLocaleString('id-ID', {timeZone:'Asia/Makassar',hour12:false})
-    : 'unknown';
+  await bot.sendMessage(msg.chat.id, formatAccountsList(accounts), {
+    ...buildAccountsMenuKeyboard(accounts)
+  });
+});
 
-  for (const a of accounts) {
-    const st = VAULT.jwtStatus(a.code);
-    const isActive = st.expiresAt && activeExpStr !== 'unknown' && activeExp > 0;
-    const activeMark = '';
-    txt += `${activeMark}\`${a.code}\` — ${a.email}\\n`;
-    txt += `  ├ Dealer : ${a.dealerName}\\n`;
-    if (st.jwtExists) {
-      const badge = st.status === 'valid' ? '✅' : st.status === 'expiring_soon' ? '⚠️' : '❌';
-      txt += `  └ ${badge} JWT: *${st.remainingStr}* (${badge !== '✅' ? '⚠️ ' : ''}exp ${st.expiresAt ? new Date(st.expiresAt).toLocaleString('id-ID',{timeZone:'Asia/Makassar',hour12:false}) : '?'})\\n`;
+// ── /aktivitas — Clock-in/out activities from Star API ─────────────────────
+bot.onText(/^\/aktivitas(?:\s+(\S+))?$/, async (msg, match) => {
+  const sub = (match[1] || '').toUpperCase();
+  await bot.sendMessage(msg.chat.id, '⏳ Mengambil data aktivitas dari Star API...', { parse_mode: 'HTML' });
+
+  try {
+    const report = await SA.getFullActivityReport();
+
+    let text;
+    if (sub === 'POS') {
+      text = SA.formatPOSReport(report);
+    } else if (sub === 'BTL') {
+      text = SA.formatBTLReport(report);
     } else {
-      txt += `  └ ❌ JWT: *belum ada* (pakai \`/relogin ${a.code}\`)\\n`;
+      text = SA.formatActivityReport(report);
     }
-    txt += `\\n`;
-  }
-  txt += `Active JWT exp: *${activeExpStr}*\\n\\n`;
-  txt += `Commands:\\n`;
-  txt += `\`/accounts\`   — list semua akun\\n`;
-  txt += `\`/relogin <CODE>\` — login ulang (Playwright+MFA)\\n`;
-  txt += `\`/use <CODE>\`  — switch JWT aktif`;
 
-  await bot.sendMessage(msg.chat.id, txt, { parse_mode: 'Markdown' });
+    await bot.sendMessage(msg.chat.id, text);
+  } catch (e) {
+    // Show JWT status on failure
+    const jwt = SA.verifyJwt();
+    let status = '';
+    if (jwt.ok) {
+      status = `\n\nJWT: ✅ ${jwt.name}\nExp: ${jwt.exp} (${jwt.remaining} remaining)`;
+    } else {
+      status = `\n\n❌ JWT Error: ${jwt.error || 'expired/invalid'}`;
+    }
+    await bot.sendMessage(msg.chat.id, `❌ Gagal mengambil data.\n\nError: ${e.message}${status}`);
+  }
 });
 
 // /relogin — trigger Playwright OIDC login for specified account
 bot.onText(/^\/relogin\s+(\S+)/, async (msg, match) => {
   const code = match[1].toUpperCase();
   const acct = VAULT.getAccount(code);
-  if (!acct) return bot.sendMessage(msg.chat.id, `❌ Akun \`${code}\` tidak ditemukan.\\nCek dengan \`/accounts\`.`, { parse_mode: 'Markdown' });
+  if (!acct) return bot.sendMessage(msg.chat.id, `❌ Akun ${code} tidak ditemukan.\nCek dengan /accounts.`);
   if (!acct.password || acct.password === 'NEED_PASSWORD') {
     return bot.sendMessage(msg.chat.id,
-      `❌ Password untuk \`${code}\` belum di-set.\\n\\n` +
-      `Vault: ${VAULT.VAULT_FILE}\\n\\n` +
-      `Password di-vault.json, atau ketik \`/setpw ${code} <password>\` untuk update via bot.`,
-      { parse_mode: 'Markdown' }
+      `❌ Password untuk ${code} belum di-set.\n\n` +
+      `Ketik /setpw ${code} <password> untuk simpan.`
     );
   }
   await bot.sendMessage(msg.chat.id,
-    `🔄 *Login Star [${code}]*
-
-Sedang proses login...
-
-` +
-    `Password: ✅ (dari vault)
-` +
-    `Method   : Playwright + MFA push
-` +
-    `_estimasi: 30-60 detik
-
-` +
-    `Akan kirim notifikasi ke chat ini saat MFA diperlukan.`,
-    { parse_mode: 'Markdown' }
+    `🔄 Login Star [${code}]\n` +
+    `Sedang proses...\n` +
+    `Password: ✅ (dari vault)\n` +
+    `Method   : Playwright + MFA push\n` +
+    `Estimasi : 30-60 detik\n\n` +
+    `Akan kirim notifikasi ke chat ini saat MFA diperlukan.`
   );
   try {
     const { spawn } = require('child_process');
@@ -611,7 +712,7 @@ bot.onText(/^\/setpw\s+(\S+)\s+(.+)/, async (msg, match) => {
   const code = match[1].toUpperCase();
   const password = match[2];
   const acct = VAULT.getAccount(code);
-  if (!acct) return bot.sendMessage(msg.chat.id, `❌ Akun \`${code}\` tidak ditemukan.`, { parse_mode: 'Markdown' });
+  if (!acct) return bot.sendMessage(msg.chat.id, `❌ Akun ${code} tidak ditemukan.`);
   try {
     const fs2 = require('fs');
     const vaultPath = VAULT.VAULT_FILE;
@@ -619,9 +720,7 @@ bot.onText(/^\/setpw\s+(\S+)\s+(.+)/, async (msg, match) => {
     vault[code].password = password;
     vault[code].updatedAt = new Date().toISOString();
     fs2.writeFileSync(vaultPath, JSON.stringify(vault, null, 2));
-    await bot.sendMessage(msg.chat.id, `✅ Password untuk \`${code}\` tersimpan di vault.
-
-Sekarang bisa pakai \`/relogin ${code}\` untuk refresh JWT.`, { parse_mode: 'Markdown' });
+    await bot.sendMessage(msg.chat.id, `✅ Password untuk ${code} tersimpan di vault.\n\nSekarang bisa pakai /relogin ${code} untuk dapat JWT.`);
   } catch (e) {
     await bot.sendMessage(msg.chat.id, `❌ Gagal simpan password: ${e.message}`);
   }
@@ -635,17 +734,13 @@ bot.onText(/^\/use\s+(\S+)/, async (msg, match) => {
     const st = VAULT.jwtStatus(code);
     const expStr = st.expiresAt ? new Date(st.expiresAt).toLocaleString('id-ID', {timeZone:'Asia/Makassar',hour12:false}) : '?';
     await bot.sendMessage(msg.chat.id,
-      `✅ JWT \`${code}\` jadi aktif.
-
-File   : ${main}
-Expires: ${expStr}`,
-      { parse_mode: 'Markdown' }
+      `✅ JWT ${code} jadi aktif.\nFile : ${main}\nExpires: ${expStr}`
     );
     // Restart bot to reload JWT
-    await bot.sendMessage(msg.chat.id, `🔄 Merestart bot untuk load JWT baru...`, { parse_mode: 'Markdown' });
+    await bot.sendMessage(msg.chat.id, `🔄 Merestart bot untuk load JWT baru...`);
     setTimeout(() => { require('child_process').execSync('systemctl --user restart prospek-bot'); }, 1500);
   } catch (e) {
-    await bot.sendMessage(msg.chat.id, `❌ Gagal switch: ${e.message}`, { parse_mode: 'Markdown' });
+    await bot.sendMessage(msg.chat.id, `❌ Gagal switch: ${e.message}`);
   }
 });
 
@@ -657,121 +752,152 @@ bot.on('callback_query', async (q) => {
   const c = convGet(chatId) || {};
   await bot.answerCallbackQuery(q.id);
 
-  // --- ACCOUNTS MENU ---
+  // ── ACCOUNTS MENU (list all) ─────────────────────────────────────────────────
   if (data === 'accounts:menu') {
     const accounts = VAULT.listAccounts();
-    let txt = `🔐 *Star API Accounts*\\n\\n`;
-    const activeJwt = fs.readFileSync(JWT_FILE, 'utf8').trim();
-    const activeExp = VAULT.decodeJwtExp(activeJwt) || 0;
-
-    for (const a of accounts) {
-      const st = VAULT.jwtStatus(a.code);
-      const isActive = (st.expiresAt && activeExp > 0);
-      const badge = !st.jwtExists ? '❌' : st.status === 'valid' ? '✅' : '⚠️';
-      txt += `${badge} \`${a.code}\` — ${a.email}\\n`;
-      txt += `   Dealer : ${a.dealerName}\\n`;
-      if (st.jwtExists) {
-        const expStr = st.expiresAt ? new Date(st.expiresAt).toLocaleString('id-ID',{timeZone:'Asia/Makassar',hour12:false}) : '?';
-        txt += `   JWT    : *${st.remainingStr}* (${expStr})
-`;
-      } else {
-        txt += `   JWT    : *belum ada*
-`;
-      }
-      txt += `\\n`;
-    }
-
-    // Build inline buttons for each account
-    const rows = [];
-    for (const a of accounts) {
-      const st = VAULT.jwtStatus(a.code);
-      rows.push([
-        { text: `🔑 ${a.code}`, callback_data: `accounts:use:${a.code}` },
-        { text: `🔄 Relogin`, callback_data: `accounts:relogin:${a.code}` },
-      ]);
-    }
-    rows.push([{ text: '📋 Help Akun', callback_data: 'accounts:help' }]);
-
-    return editMsg(chatId, msgId, txt, {
-      parse_mode: 'Markdown',
-      reply_markup: { inline_keyboard: rows }
-    });
+    return editMsg(chatId, msgId, formatAccountsList(accounts), buildAccountsMenuKeyboard(accounts));
   }
 
-  // accounts:use:X → switch active JWT
+  // noop — separator label button
+  if (data === 'noop') return;
+
+  // accounts:detail:CODE — View account detail + actions
+  if (data.startsWith('accounts:detail:')) {
+    const code = data.split(':')[2];
+    const a = VAULT.getAccount(code);
+    if (!a) return editMsg(chatId, msgId, `❌ Akun tidak ditemukan.`, backBtn('accounts:menu'));
+    const st = VAULT.getJwtStatus(code);
+    const { emoji, label } = _s(st);
+    const expStr = st.expiresAt
+      ? new Date(st.expiresAt).toLocaleString('id-ID', { timeZone: 'Asia/Makassar', hour12: false })
+      : '-';
+    const lines = [
+      '━━━━━━━━━━━━━━━━━━━━',
+      `  🔑  DETAIL AKUN`,
+      '━━━━━━━━━━━━━━━━━━━━',
+      `  Kode     : ${code}`,
+      `  Dealer   : ${a.dealerName || '-'}`,
+      `  Email    : ${a.email}`,
+      `  Password : ${a.password ? '✅ Tersimpan' : '❌ Belum ada'}`,
+      '',
+      `  Status   : ${emoji}  ${label}`,
+      `  Expires  : ${expStr}`,
+      '━━━━━━━━━━━━━━━━━━━━',
+    ];
+    return editMsg(chatId, msgId, lines.join('\n'), buildAccountDetailKeyboard(code));
+  }
+
+  // accounts:use:CODE — switch active JWT
   if (data.startsWith('accounts:use:')) {
     const code = data.split(':')[2];
     try {
-      const main = VAULT.setActiveAccount(code);
-      const st = VAULT.jwtStatus(code);
-      const expStr = st.expiresAt ? new Date(st.expiresAt).toLocaleString('id-ID',{timeZone:'Asia/Makassar',hour12:false}) : '?';
-      await bot.sendMessage(chatId, `✅ JWT \`${code}\` aktif.
-Expires: ${expStr}`, { parse_mode: 'Markdown' });
-      // Reload jwt variable
+      VAULT.setActiveAccount(code);
       jwt = fs.readFileSync(JWT_FILE, 'utf8').trim();
-      await bot.sendMessage(chatId, '👋 *Menu Utama*', { parse_mode: 'Markdown', ...mainMenu });
+      const st = VAULT.jwtStatus(code);
+      const expStr = st.expiresAt ? new Date(st.expiresAt).toLocaleString('id-ID', { timeZone: 'Asia/Makassar', hour12: false }) : '?';
+      await bot.sendMessage(chatId, `✅ JWT ${code} aktif. Expires: ${expStr}`);
+      return editMsg(chatId, msgId, '👋 Menu Utama', mainMenu);
     } catch (e) {
-      await editMsg(chatId, msgId, `❌ Gagal switch: ${e.message}`, mainMenu);
+      return editMsg(chatId, msgId, `❌ Gagal: ${e.message}`, backBtn('accounts:detail:' + code));
     }
-    return;
   }
 
-  // accounts:relogin:X → trigger login
+  // accounts:relogin:CODE — trigger login
   if (data.startsWith('accounts:relogin:')) {
     const code = data.split(':')[2];
     const acct = VAULT.getAccount(code);
-    if (!acct || !acct.password || acct.password === 'NEED_PASSWORD') {
+    if (!acct || !acct.password) {
       return editMsg(chatId, msgId,
-        `❌ Password untuk \`${code}\` belum di-set.
-
-Ketik di chat:
-/setpw ${code} <password>
-
-Setelah itu klik Relogin lagi.`,
-        { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [[{text:'⬅️ Kembali', callback_data:'accounts:menu'}]] } }
+        `❌ Password untuk ${code} belum di-set.\n\nKlik ✏️ Edit Password untuk menambah.`,
+        { reply_markup: { inline_keyboard: [
+          [{ text: '✏️ Edit Password', callback_data: 'accounts:edit_password:' + code }],
+          [{ text: '⬅️ Kembali',       callback_data: 'accounts:detail:' + code }],
+        ]}}
       );
     }
-    await editMsg(chatId, msgId,
-      `🔄 *Login Star [${code}]*
-
-Sedang proses login...
-_estimasi: 30-60 detik.
-
-Akan kirim notifikasi saat MFA diperlukan.`,
-      { parse_mode: 'Markdown' }
-    );
+    await editMsg(chatId, msgId, `🔄 Login Star [${code}] — Sedang proses...`);
     try {
       const { spawn } = require('child_process');
-      const loginPath = path.join(__dirname, 'login-star.js');
-      const child = spawn('node', [loginPath, code, '--chat-id', chatId.toString()], {
+      const child = spawn('node', [path.join(__dirname, 'login-star.js'), code, '--chat-id', chatId.toString()], {
         cwd: __dirname, detached: true, stdio: 'ignore',
       });
       child.unref();
-      console.log(`[/accounts:relogin] Started login-star.js for ${code}`);
     } catch (e) {
-      await bot.sendMessage(chatId, `❌ Gagal jalankan login: ${e.message}`);
+      return editMsg(chatId, msgId, `❌ Gagal: ${e.message}`, backBtn('accounts:detail:' + code));
     }
     return;
   }
 
-  // accounts:help
-  if (data === 'accounts:help') {
+  // accounts:edit:CODE — show edit menu
+  if (data.startsWith('accounts:edit:')) {
+    const code = data.split(':')[2];
+    const a = VAULT.getAccount(code);
+    const lines = [
+      `✏️ Edit Akun: ${code}`,
+      `Email    : ${a?.email || '-'}`,
+      `Password : ${a?.password ? '✅' : '❌'}`,
+      `Dealer   : ${a?.dealerName || '-'}`,
+      '',
+      'Pilih field yang ingin diedit:',
+    ];
+    return editMsg(chatId, msgId, lines.join('\n'), buildAccountEditKeyboard(code));
+  }
+
+  // accounts:edit_email:CODE
+  if (data.startsWith('accounts:edit_email:')) {
+    const code = data.split(':')[2];
+    convSet(chatId, { step: 'wait_acct_edit_email', code });
+    return editMsg(chatId, msgId, `✏️ *Edit Email — ${code}*\n\nKetik email baru:`, cancelBtn());
+  }
+
+  // accounts:edit_password:CODE
+  if (data.startsWith('accounts:edit_password:')) {
+    const code = data.split(':')[2];
+    convSet(chatId, { step: 'wait_acct_edit_password', code });
+    return editMsg(chatId, msgId, `🔑 *Edit Password — ${code}*\n\nKetik password baru:`, cancelBtn());
+  }
+
+  // accounts:edit_dealer:CODE
+  if (data.startsWith('accounts:edit_dealer:')) {
+    const code = data.split(':')[2];
+    convSet(chatId, { step: 'wait_acct_edit_dealer', code });
+    return editMsg(chatId, msgId, `🏪 *Edit Dealer — ${code}*\n\nKetik nama dealer:`, cancelBtn());
+  }
+
+  // accounts:delete:CODE — confirm delete
+  if (data.startsWith('accounts:delete:')) {
+    const code = data.split(':')[2];
     return editMsg(chatId, msgId,
-      `🔐 *Help — Account Management*
-
-` +
-      `\`/accounts\`  — list semua akun
-` +
-      `\`/relogin <CODE>\` — login ulang via browser
-` +
-      `\`/setpw <CODE> <password>\` — update password vault
-` +
-      `\`/use <CODE>\`  — switch JWT aktif
-
-` +
-      `Vault file: ${VAULT.VAULT_FILE}`,
-      { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [[{text:'⬅️ Kembali', callback_data:'accounts:menu'}]] } }
+      `⚠️ *Konfirmasi Hapus Akun*\n\nHapus \`${code}\` dari vault?\n_JWT file juga akan dihapus._`,
+      { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [
+        [{ text: '✅ Ya, Hapus', callback_data: 'accounts:delete_confirm:' + code }],
+        [{ text: '⬅️ Batal',    callback_data: 'accounts:detail:' + code }],
+      ]}}
     );
+  }
+
+  // accounts:delete_confirm:CODE
+  if (data.startsWith('accounts:delete_confirm:')) {
+    const code = data.split(':')[2];
+    VAULT.removeAccount(code);
+    return editMsg(chatId, msgId, `🗑️ Akun ${code} dihapus dari vault.`, backBtn('accounts:menu'));
+  }
+
+  // accounts:add:start
+  if (data === 'accounts:add:start') {
+    return editMsg(chatId, msgId,
+      '➕ Tambah Akun Baru\n\nKlik Lanjut untuk mulai.',
+      { reply_markup: { inline_keyboard: [
+        [{ text: '✅ Lanjut', callback_data: 'accounts:add:code' }],
+        [{ text: '⬅️ Batal',  callback_data: 'accounts:menu' }],
+      ]}}
+    );
+  }
+
+  // accounts:add:code — begin add flow
+  if (data === 'accounts:add:code') {
+    convSet(chatId, { step: 'wait_acct_code', action: 'add' });
+    return editMsg(chatId, msgId, '📋 Tambah Akun — Langkah 1/4\n\nKetik KODE AKUN (misal: BUDI):', cancelBtn());
   }
 
   // --- CANCEL ---
@@ -1239,7 +1365,7 @@ Akan kirim notifikasi saat MFA diperlukan.`,
         let hasMore = true;
         while (hasMore) {
           const cursorArg = after ? `, after: "${after}"` : '';
-          const q = '{ getCustomerProspectFromCustomers(first: 10' + cursorArg + ', where: { prospectNumber: { startsWith: "H704-PRS" }, prospectStatus: { eq: ' + st + ' }, createdBy: { eq: "' + JWT_UUID + '" }, created: { gte: "2026-07-01T00:00:00Z", lte: "2026-07-31T23:59:59Z" } }) { nodes { id prospectNumber name prospectStatus } pageInfo { hasNextPage endCursor } } }';
+          const q = '{ getCustomerProspectFromCustomers(first: 10' + cursorArg + ', where: { prospectNumber: { startsWith: "H704-PRS" }, prospectStatus: { eq: ' + st + ' }, createdBy: { eq: "' + currentJwtUuid() + '" }, created: { gte: "2026-07-01T00:00:00Z", lte: "2026-07-31T23:59:59Z" } }) { nodes { id prospectNumber name prospectStatus } pageInfo { hasNextPage endCursor } } }';
           const d = callStar(q);
           const nodes = d.getCustomerProspectFromCustomers.nodes;
           const pi = d.getCustomerProspectFromCustomers.pageInfo;
@@ -1339,7 +1465,7 @@ Akan kirim notifikasi saat MFA diperlukan.`,
       while (hasMore) {
         try {
           const cursorArg = after ? `, after: "${after}"` : '';
-          const q = '{ getCustomerProspectFromCustomers(first: 10' + cursorArg + ', where: { prospectNumber: { startsWith: "H704-PRS" }, prospectStatus: { eq: ' + st + ' }, createdBy: { eq: "' + JWT_UUID + '" }, created: { gte: "2026-07-01T00:00:00Z", lte: "2026-07-31T23:59:59Z" } }) { nodes { id prospectNumber name prospectStatus } pageInfo { hasNextPage endCursor } } }';
+          const q = '{ getCustomerProspectFromCustomers(first: 10' + cursorArg + ', where: { prospectNumber: { startsWith: "H704-PRS" }, prospectStatus: { eq: ' + st + ' }, createdBy: { eq: "' + currentJwtUuid() + '" }, created: { gte: "2026-07-01T00:00:00Z", lte: "2026-07-31T23:59:59Z" } }) { nodes { id prospectNumber name prospectStatus } pageInfo { hasNextPage endCursor } } }';
           const d = callStar(q);
           const nodes = d.getCustomerProspectFromCustomers.nodes;
           const pi = d.getCustomerProspectFromCustomers.pageInfo;
@@ -1914,6 +2040,78 @@ bot.on('message', async (msg) => {
     } catch (e) {
       return bot.sendMessage(chatId, `❌ Error: ${e.message}`, cancelBtn());
     }
+  }
+
+  // ── Account add/edit conversation handlers ─────────────────────────────────
+  if (s.step === 'wait_acct_code') {
+    const code = text.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+    if (!code) return bot.sendMessage(chatId, '❌ Kode tidak valid.', cancelBtn());
+    if (VAULT.getAccount(code)) return bot.sendMessage(chatId, `❌ Kode ${code} sudah ada. Gunakan kode lain.`, cancelBtn());
+    convSet(chatId, { step: 'wait_acct_email', code, action: 'add' });
+    return bot.sendMessage(chatId, `📋 Akun: ${code}\n\nKetik EMAIL akun:`, cancelBtn());
+  }
+  if (s.step === 'wait_acct_email' && s.action === 'add') {
+    const email = text.trim();
+    if (!email.includes('@')) return bot.sendMessage(chatId, '❌ Email tidak valid.', cancelBtn());
+    convSet(chatId, { step: 'wait_acct_password', code: s.code, email, action: 'add' });
+    return bot.sendMessage(chatId, `📧 Email: ${email}\n\nKetik PASSWORD Star API:`, cancelBtn());
+  }
+  if (s.step === 'wait_acct_password' && s.action === 'add') {
+    const password = text.trim();
+    if (!password) return bot.sendMessage(chatId, '❌ Password tidak boleh kosong.', cancelBtn());
+    convSet(chatId, { step: 'wait_acct_dealer', code: s.code, email: s.email, password, action: 'add' });
+    return bot.sendMessage(chatId, `🔑 Password tersimpan.\n\nKetik NAMA DEALER:`, cancelBtn());
+  }
+  if (s.step === 'wait_acct_dealer' && s.action === 'add') {
+    const dealerName = text.trim();
+    if (!dealerName) return bot.sendMessage(chatId, '❌ Nama dealer tidak boleh kosong.', cancelBtn());
+    try {
+      VAULT.addAccount(s.code, { email: s.email, password: s.password, dealerName, createdAt: new Date().toISOString(), createdBy: 'bot' });
+      conv.delete(chatId);
+      return bot.sendMessage(chatId,
+        `✅ Akun ${s.code} ditambahkan!\n\nDealer: ${dealerName}\n\nKlik Lihat Akun atau Relogin untuk dapat JWT.`,
+        { reply_markup: { inline_keyboard: [
+          [{ text: '👀 Lihat Akun', callback_data: 'accounts:menu' }],
+          [{ text: '🔙 Menu Utama', callback_data: 'menu' }],
+        ]}}
+      );
+    } catch (e) {
+      return bot.sendMessage(chatId, `❌ Gagal: ${e.message}`, cancelBtn());
+    }
+  }
+  if (s.step === 'wait_acct_edit_email') {
+    const email = text.trim();
+    if (!email.includes('@')) return bot.sendMessage(chatId, '❌ Email tidak valid.', cancelBtn());
+    try {
+      const vault = JSON.parse(fs.readFileSync(VAULT.VAULT_FILE, 'utf8'));
+      vault[s.code].email = email;
+      vault[s.code].updatedAt = new Date().toISOString();
+      fs.writeFileSync(VAULT.VAULT_FILE, JSON.stringify(vault, null, 2));
+      conv.delete(chatId);
+      return bot.sendMessage(chatId, `✅ Email untuk ${s.code} diupdate.`, backBtn('accounts:detail:' + s.code));
+    } catch (e) { return bot.sendMessage(chatId, `❌ Gagal: ${e.message}`, cancelBtn()); }
+  }
+  if (s.step === 'wait_acct_edit_password') {
+    const password = text.trim();
+    try {
+      const vault = JSON.parse(fs.readFileSync(VAULT.VAULT_FILE, 'utf8'));
+      vault[s.code].password = password;
+      vault[s.code].updatedAt = new Date().toISOString();
+      fs.writeFileSync(VAULT.VAULT_FILE, JSON.stringify(vault, null, 2));
+      conv.delete(chatId);
+      return bot.sendMessage(chatId, `✅ Password untuk ${s.code} diupdate.`, backBtn('accounts:detail:' + s.code));
+    } catch (e) { return bot.sendMessage(chatId, `❌ Gagal: ${e.message}`, cancelBtn()); }
+  }
+  if (s.step === 'wait_acct_edit_dealer') {
+    const dealerName = text.trim();
+    try {
+      const vault = JSON.parse(fs.readFileSync(VAULT.VAULT_FILE, 'utf8'));
+      vault[s.code].dealerName = dealerName;
+      vault[s.code].updatedAt = new Date().toISOString();
+      fs.writeFileSync(VAULT.VAULT_FILE, JSON.stringify(vault, null, 2));
+      conv.delete(chatId);
+      return bot.sendMessage(chatId, `✅ Dealer untuk ${s.code} diupdate.`, backBtn('accounts:detail:' + s.code));
+    } catch (e) { return bot.sendMessage(chatId, `❌ Gagal: ${e.message}`, cancelBtn()); }
   }
 });
 

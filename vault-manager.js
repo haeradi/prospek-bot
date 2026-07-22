@@ -108,6 +108,8 @@ function jwtStatus(code) {
   return { status, expiresAt: expiresAt.toISOString(), remainingSec, remainingStr };
 }
 
+function getJwtStatus(code) { return jwtStatus(code); } // alias for external callers
+
 module.exports = {
   listAccounts,
   getAccount,
@@ -117,6 +119,7 @@ module.exports = {
   loadJwt,
   setActiveAccount,
   jwtStatus,
+  getJwtStatus,
   decodeJwtExp,
   VAULT_FILE,
 };

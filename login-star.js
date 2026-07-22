@@ -1,6 +1,5 @@
 // login-star.js — Playwright OIDC login untuk Star API, simpan JWT ke vault
 // Usage: node login-star.js <ACCOUNT_CODE>
-//   e.g.:  node login-star.js SASKIA
 // Bot mode:  node login-star.js SASKIA --chat-id <telegram_chat_id>
 'use strict';
 const fs = require('fs');
@@ -8,26 +7,18 @@ const path = require('path');
 const { execSync } = require('child_process');
 
 const ROOT = __dirname;
-const LOG_DIR = '/home/ubuntu/prospek-bot/logs';
+const LOG_DIR = path.join(ROOT, 'logs');
 fs.mkdirSync(LOG_DIR, { recursive: true });
 
 const LOG_FILE = path.join(LOG_DIR, `login-star-${Date.now()}.log`);
-const log = (...a) => {
-  const ts = new Date().toISOString();
-  const line = `[${ts}] ${a.join(' ')}`;
-  console.log(line);
-  fs.appendFileSync(LOG_FILE, line + '\n', 'utf8');
-};
-
-const VAULT    = require('./vault-manager');
+const VAULT = require('./vault-manager');
 const STAR_API = 'https://api.star.astra.co.id/graphql/';
-const ASSIST_URL = 'https://assist.star.astra.co.id/assistant/customer-prospect';
-const MFA_WAIT_SECONDS = 180;
+const MFA_WAIT_SECONDS = 240;
 
 // ─── Parse args ──────────────────────────────────────────────────────────────
 const args = process.argv.slice(2);
 let accountCode = null;
-let chatId = null; // Telegram chat ID to notify
+let chatId = null;
 
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--chat-id' && args[i+1]) {
@@ -37,27 +28,48 @@ for (let i = 0; i < args.length; i++) {
     accountCode = args[i].toUpperCase();
   }
 }
-
 if (!accountCode) {
   console.error('Usage: node login-star.js <ACCOUNT_CODE> [--chat-id <telegram_chat_id>]');
   process.exit(1);
 }
 
-// ─── Notify via Telegram ──────────────────────────────────────────────────────
+// ─── Status file (IPC between login process and bot) ──────────────────────────
+// Bot polls this file and forwards updates to Telegram
+const STATUS_FILE = path.join(LOG_DIR, `login-status-${accountCode}.json`);
+
+function updateStatus(step, message, extra = {}) {
+  const data = {
+    code: accountCode,
+    step,       // 'login' | 'mfa' | 'done' | 'error'
+    message,
+    ts: new Date().toISOString(),
+    ...extra,
+  };
+  fs.writeFileSync(STATUS_FILE, JSON.stringify(data, null, 2));
+  // Also log
+  const line = `[${new Date().toISOString()}] [${step}] ${message}`;
+  console.log(line);
+  fs.appendFileSync(LOG_FILE, line + '\n', 'utf8');
+  // Also send Telegram if we have chatId
+  sendTelegram(message);
+}
+
+// ─── Telegram notify ─────────────────────────────────────────────────────────
 function sendTelegram(text) {
+  if (!chatId) return;
   try {
     const TG_TOKEN = fs.readFileSync(path.join(ROOT, 'tg_token.txt'), 'utf8').trim();
-    if (!chatId) return;
-    const escaped = text.replace(/"/g, '\\"').replace(/\n/g, '\\n');
+    const escaped = text.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n');
     const cmd = `curl -s --max-time 10 "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" ` +
       `-H "Content-Type: application/json" ` +
-      `-d "{\\"chat_id\\":${chatId},\\"text\\":\\"${escaped}\\",\\"parse_mode\\":\\"Markdown\\"}"`;
+      `-d "{\\"chat_id\\":${chatId},\\"text\\":\\"${escaped}\\"}"`;
     execSync(cmd, { encoding: 'utf8' });
   } catch (e) {
-    log('[TG] notify failed:', e.message);
+    console.log('[TG] failed:', e.message);
   }
 }
 
+// ─── JWT decode ─────────────────────────────────────────────────────────────
 function decodeJwtPayload(jwt) {
   try {
     const [, payload] = jwt.split('.');
@@ -65,347 +77,388 @@ function decodeJwtPayload(jwt) {
   } catch { return null; }
 }
 
-// ─── Main login flow ─────────────────────────────────────────────────────────
+// ─── Main ───────────────────────────────────────────────────────────────────
 async function runLogin() {
   const account = VAULT.getAccount(accountCode);
-  if (!account) throw new Error(`Account ${accountCode} not found in vault. Add via bot menu.`);
-  if (!account.password) throw new Error(`No password for ${accountCode}. Update via bot menu.`);
+  if (!account) throw new Error(`Akun ${accountCode} tidak ditemukan di vault.`);
+  if (!account.password) throw new Error(`Password untuk ${accountCode} belum di-set.`);
 
-  log(`=== Login flow for [${accountCode}] ${account.email} ===`);
-  sendTelegram(`🔐 *Login Star [${accountCode}]*\nSedang proses login, tunggu sebentar...`);
+  updateStatus('login', `🔐 *Login Star [${accountCode}]*\nMulai login...\nAccount: ${account.email}\nDealer: ${account.dealerName}`);
 
-  const { chromium } = require('/home/ubuntu/assist-bot/node_modules/playwright');
-
+  const { chromium } = require('./node_modules/playwright');
   const browser = await chromium.launch({
     headless: true,
-    args: [
-      '--no-sandbox',
-      '--disable-blink-features=AutomationControlled',
-      '--disable-dev-shm-usage',
-    ],
+    args: ['--no-sandbox', '--disable-blink-features=AutomationControlled', '--disable-dev-shm-usage'],
   });
+
   const ctx = await browser.newContext({
-    userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36',
+    userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     viewport: { width: 1366, height: 768 },
   });
   const page = await ctx.newPage();
 
-  const captured = { tokens: [], apiCalls: [] };
+  // Shared state between response handler and main loop
+  const tokenState = { starApiSeen: false, saved: false };
+  const tokenPath = path.join(LOG_DIR, `token-${accountCode}.json`);
 
-  // Capture network responses for JWT
-  page.on('response', async (resp) => {
-    const url = resp.url();
-    if (url.includes('api.star.astra.co.id') || url.includes('identity.star.astra.co.id') ||
-        url.includes('/auth') || url.includes('/token')) {
-      try {
-        const body = await resp.text();
-        captured.apiCalls.push({ url, status: resp.status(), body: body.slice(0, 4000) });
-        const m = body.match(/eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/);
-        if (m) captured.tokens.push({ url, token: m[0] });
-      } catch {}
+  // Capture Star API requests
+  page.on('response', resp => {
+    if (resp.url().includes('api.star.astra.co.id')) {
+      tokenState.starApiSeen = true;
+      updateStatus('login', `🔐 [${accountCode}] Star API request detected — MFA approved!`);
     }
   });
 
-  try {
-    // ── Step 1: Navigate to ASSIST login ────────────────────────────────────
-    const loginUrl = 'https://assist.star.astra.co.id/login';
-    log('Goto', loginUrl);
-    await page.goto(loginUrl, { waitUntil: 'networkidle', timeout: 60000 });
+  // ── Step 1: ASSIST login page ────────────────────────────────────────────
+  updateStatus('login', `⏳ Buka halaman login ASSIST...`);
+  await page.goto('https://assist.star.astra.co.id/login', { waitUntil: 'networkidle', timeout: 60000 });
 
-    // ── Step 2: Fill email ───────────────────────────────────────────────────
-    log('Waiting for email field...');
-    const assistFieldSel = 'input[placeholder*="Username"]';
-    const msFieldSel = 'input[name="loginfmt"]';
-    let emailFilled = false;
-    const fieldDeadline = Date.now() + 40000;
+  // ── Step 2: Fill email in ASSIST form ───────────────────────────────────
+  updateStatus('login', `⏳ Input email...`);
+  await page.waitForSelector('input[placeholder*="Username"]', { timeout: 20000 });
+  await page.fill('input[placeholder*="Username"]', account.email);
+  await page.click('button:has-text("Login")');
+  await page.waitForTimeout(2000);
 
-    while (Date.now() < fieldDeadline && !emailFilled) {
-      const assistEl = await page.$(assistFieldSel);
-      if (assistEl) {
-        try {
-          await assistEl.scrollIntoViewIfNeeded().catch(() => {});
-          await assistEl.click({ timeout: 3000 });
-          await assistEl.fill(account.email);
-          log('ASSIST Username filled');
-          await page.click('button:has-text("Login")');
-          emailFilled = true;
-          break;
-        } catch {}
-      }
-      const msEl = await page.$(msFieldSel);
-      if (msEl) {
-        try {
-          await msEl.click({ timeout: 3000 });
-          await msEl.fill(account.email);
-          log('MS email filled');
-          await page.click('input[type="submit"]');
-          emailFilled = true;
-          break;
-        } catch {}
-      }
-      const pwdEl = await page.$('input[type="password"]');
-      if (pwdEl) {
-        log('Already on password page (cached session)');
-        emailFilled = true;
+  // ── Step 3: Pick account on Microsoft (if shown) ─────────────────────────
+  updateStatus('login', `⏳ Pilih akun di Microsoft...`);
+  const pickSelectors = [
+    `button[aria-label*="${account.email}"]`,
+    `div[data-test-id="${account.email}"]`,
+  ];
+  for (const sel of pickSelectors) {
+    try {
+      const loc = page.locator(sel).first();
+      if (await loc.isVisible({ timeout: 1500 })) {
+        await loc.click();
+        await page.waitForTimeout(2000);
         break;
       }
-      await page.waitForTimeout(1000);
-    }
-    if (!emailFilled) {
-      const inputs = await page.$$eval('input', els => els.map(x => ({
-        type: x.type, placeholder: x.placeholder, name: x.name
-      }))).catch(() => []);
-      throw new Error(`Email field not found after 40s. URL: ${page.url()}, inputs: ${JSON.stringify(inputs)}`);
-    }
+    } catch {}
+  }
 
-    await page.waitForLoadState('domcontentloaded');
-    await page.waitForTimeout(3000);
-    log('After email, URL:', page.url());
+  // ── Step 4: Fill password ────────────────────────────────────────────────
+  updateStatus('login', `⏳ Input password...`);
+  await page.waitForSelector('input[type="password"]', { timeout: 30000 });
+  await page.fill('input[type="password"]', account.password);
+  await page.locator('input[type="submit"], button:has-text("Sign in")').first().click();
 
-    // ── Step 3: Pick account (if "Pick an account" screen) ───────────────────
-    const pickSelectors = [
-      `div[data-test-id="${account.email}"]`,
-      `button[aria-label*="${account.email}"]`,
-      `[aria-label*="${account.email}"]`,
-      `div:has-text("${account.email}")`,
-    ];
-    for (const sel of pickSelectors) {
-      try {
-        const loc = page.locator(sel).first();
-        if (await loc.isVisible({ timeout: 1000 })) {
-          log('Picking account:', sel);
-          await loc.click();
-          await page.waitForTimeout(2000);
-          break;
-        }
-      } catch {}
+  // ── Step 5: Wait for MFA ────────────────────────────────────────────────
+  await page.waitForTimeout(3000);
+
+  let mfaNumber = null;
+  const mfaFindDeadline = Date.now() + 30000;
+  while (Date.now() < mfaFindDeadline) {
+    const txt = await page.locator('body').innerText().catch(() => '');
+    // Try #idRichContext_DisplaySign (the number element)
+    const signEl = page.locator('#idRichContext_DisplaySign');
+    if (await signEl.count() > 0) {
+      const num = (await signEl.textContent().catch(() => '')).trim();
+      if (/^\d{2,3}$/.test(num)) {
+        mfaNumber = num;
+        break;
+      }
     }
-
-    // ── Step 4: Fill password ────────────────────────────────────────────────
-    log('Waiting for password field (45s)...');
-    await page.waitForSelector('input[type="password"]', { timeout: 45000 });
-    await page.fill('input[type="password"]', account.password);
+    // Fallback: regex on body text
+    const m = txt.match(/enter the number[\s\S]{0,200}?(\d{2,3})/i);
+    if (m) { mfaNumber = m[1]; break; }
+    if (/Stay signed in|Tetap masuk/i.test(txt)) break;
     await page.waitForTimeout(500);
-    const submitted = await page
-      .locator('input[type="submit"]').first().click({ timeout: 5000 })
-      .then(() => true).catch(() => false);
-    if (!submitted) {
-      await page.locator('button:has-text("Sign in")').first().click();
+  }
+
+  if (mfaNumber) {
+    updateStatus('mfa',
+      `🔐 *Login [${accountCode}] — VERIFIKASI*\n\n` +
+      `Buka *Microsoft Authenticator*\n` +
+      `Tap angka: *${mfaNumber}*\n\n` +
+      `⏳ Menunggu approve...`
+    );
+  } else {
+    updateStatus('mfa',
+      `🔐 *Login [${accountCode}]*\n\n` +
+      `MFA push sudah dikirim.\n` +
+      `Buka Authenticator app, approve request.\n\n` +
+      `⏳ Menunggu approve...`
+    );
+  }
+
+  // ── Step 6: Wait for MFA approval + handle KMSI + redirect to ASSIST ─────
+  // PROVEN FLOW (from assist-bot/login.js):
+  //   1. Poll for redirect to assist.star.astra.co.id
+  //   2. Handle "Stay signed in?" (KMSI) prompt → click Yes
+  //   3. Once on ASSIST: networkidle + poll localStorage for oidc.user token
+  //   DO NOT navigate to identity domain — that wipes the session token!
+  const deadline = Date.now() + MFA_WAIT_SECONDS * 1000;
+  let onAssist = false;
+  let kmsiHandled = false;
+
+  while (Date.now() < deadline) {
+    try { if (page.isClosed()) break; } catch { break; }
+    const url = page.url() || '';
+
+    // Redirected to ASSIST = MFA approved successfully
+    if (/assist\.star\.astra\.co\.id/.test(url)) {
+      onAssist = true;
+      break;
     }
 
-    // ── Step 5: MFA ──────────────────────────────────────────────────────────
-    await page.waitForTimeout(2500);
-    const pickerDeadline = Date.now() + 15000;
-    let methodPicked = false;
+    const bodyText = await page.locator('body').innerText().catch(() => '');
 
-    while (Date.now() < pickerDeadline && !methodPicked) {
-      const txt = await page.locator('body').innerText().catch(() => '');
-      if (/Verify your identity|Approve a request on my Microsoft Authenticator/i.test(txt)) {
-        const candidates = [
-          'div[data-value="PhoneAppNotification"]',
-          'div:has-text("Approve a request on my Microsoft Authenticator app")',
-        ];
-        for (const sel of candidates) {
-          try {
-            const loc = page.locator(sel).first();
-            if (await loc.isVisible({ timeout: 800 })) {
-              log('Picking Authenticator method:', sel);
-              await loc.click();
-              methodPicked = true;
-              await page.waitForTimeout(2000);
-              break;
-            }
-          } catch {}
-        }
-        break;
+    // Handle KMSI "Stay signed in?" prompt
+    if (!kmsiHandled && /Stay signed in|Tetap masuk/i.test(bodyText)) {
+      updateStatus('login', `⏳ [${accountCode}] Klik "Stay signed in"...`);
+      const ok = await page.locator('input[type="submit"][value="Yes"], button:has-text("Yes")')
+        .first().click({ timeout: 5000 }).then(() => true).catch(() => false);
+      if (!ok) {
+        await page.locator('#idSIButton9').click({ timeout: 5000 }).catch(() => {});
       }
-      await page.waitForTimeout(500);
-    }
-    if (methodPicked) log('MFA method picked');
-
-    // ── Step 6: Detect MFA number ─────────────────────────────────────────────
-    log('Waiting for MFA number...');
-    let mfaNumber = null;
-    const mfaDeadline = Date.now() + 45000;
-
-    while (Date.now() < mfaDeadline) {
-      const txt = await page.locator('body').innerText().catch(() => '');
-      let m = txt.match(/Approve sign in request[\s\S]{0,300}?(\d{2,3})/);
-      if (!m) m = txt.match(/enter the number[\s\S]{0,300}?(\d{2,3})/i);
-      if (!m) {
-        const sign = await page.locator('#idRichContext_DisplaySign').textContent().catch(() => '');
-        if (sign && /^\d{2,3}$/.test(sign.trim())) {
-          mfaNumber = sign.trim();
-          break;
-        }
-      }
-      if (m) { mfaNumber = m[1]; break; }
-      if (/Stay signed in|Tetap masuk/i.test(txt)) break;
-      await page.waitForTimeout(500);
-    }
-
-    if (mfaNumber) {
-      log(`MFA number detected: ${mfaNumber}`);
-      sendTelegram(
-        `🔐 *Star Login [${accountCode}]*\n\n` +
-        `Buka *Microsoft Authenticator*, tap *${mfaNumber}* untuk approve.\n\n` +
-        `Dealer: ${account.dealerName}\n` +
-        `Waktu: ${new Date().toLocaleString('id-ID', { timeZone: 'Asia/Makassar' })}`
-      );
-    } else {
-      log('No MFA number detected');
-      sendTelegram(`🔐 Star Login [${accountCode}]: cek Microsoft Authenticator untuk approve.`);
-    }
-
-    // ── Step 7: Wait for redirect ────────────────────────────────────────────
-    const deadline = Date.now() + MFA_WAIT_SECONDS * 1000;
-    let onAssist = false;
-
-    while (Date.now() < deadline) {
-      const url = page.url();
-      if (/assist\.star\.astra\.co\.id/.test(url)) {
-        onAssist = true;
-        break;
-      }
-      const txt = await page.locator('body').innerText().catch(() => '');
-      if (!/Stay signed in|Tetap masuk/i.test('')) {
-        const kmsiOk = await page.locator('input[type="submit"][value="Yes"], button:has-text("Yes")').first()
-          .click({ timeout: 2000 }).then(() => true).catch(() => false);
-        if (kmsiOk) {
-          log('Clicked KMSI Yes');
-          await page.waitForTimeout(2000);
-        }
-      }
-      if (/We didn't hear from your phone|MFA denied/i.test(txt)) {
-        throw new Error('MFA approval failed or denied');
-      }
-      await page.waitForTimeout(1500);
-    }
-    if (!onAssist) {
-      throw new Error(`Did not redirect to ASSIST within ${MFA_WAIT_SECONDS}s. URL: ${page.url()}`);
-    }
-
-    log('Logged in. Waiting for app to fetch token...');
-    await page.waitForTimeout(5000);
-
-    // ── Step 8: Capture JWT from localStorage ────────────────────────────────
-    let access_token = null;
-    let refresh_token = null;
-    let id_token = null;
-    let oidcUser = null;
-    const tokenDeadline = Date.now() + 20000;
-
-    while (Date.now() < tokenDeadline && !access_token) {
-      const storage = await page.evaluate(() => {
-        const dump = (s) => {
-          const out = {};
-          for (let i = 0; i < s.length; i++) {
-            const k = s.key(i);
-            out[k] = s.getItem(k);
-          }
-          return out;
-        };
-        return { local: dump(localStorage), session: dump(sessionStorage) };
-      });
-
-      // Method 1: oidc.user:*star_api*
-      for (const [k, v] of Object.entries(storage.local || {})) {
-        if (/oidc\.user/i.test(k) && typeof v === 'string') {
-          try {
-            const parsed = JSON.parse(v);
-            if (parsed.access_token) {
-              access_token = parsed.access_token;
-              refresh_token = parsed.refresh_token || null;
-              id_token = parsed.id_token || null;
-              oidcUser = parsed;
-              log(`JWT found in oidc blob key: ${k}`);
-              break;
-            }
-          } catch {}
-        }
-      }
-      if (access_token) break;
-
-      // Method 2: JWT scan in localStorage
-      for (const [k, v] of Object.entries(storage.local || {})) {
-        if (typeof v === 'string' && /eyJ[A-Za-z0-9_-]{20,}\.eyJ/.test(v)) {
-          const m = v.match(/eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/);
-          if (m) {
-            const p = decodeJwtPayload(m[0]);
-            if (p && JSON.stringify(p.aud || '').includes('star_api')) {
-              access_token = m[0];
-              log(`JWT found via scan in key: ${k}`);
-              break;
-            }
-          }
-        }
-      }
-      if (access_token) break;
-
+      kmsiHandled = true;
       await page.waitForTimeout(2000);
     }
 
-    // Fallback: scan captured network tokens
-    if (!access_token) {
-      log('Fallback: scanning captured network tokens...');
-      for (const t of captured.tokens) {
-        const p = decodeJwtPayload(t.token);
-        if (p && JSON.stringify(p.aud || '').includes('star_api')) {
-          access_token = t.token;
-          log('JWT found in network capture');
-          break;
+    // MFA denied
+    if (/We didn't hear from your phone|It looks like you didn't approve|denied/i.test(bodyText)) {
+      updateStatus('error', `❌ *Login [${accountCode}]*\nMFA ditolak atau timeout di HP.\n\nCoba /relogin ${accountCode} lagi.`);
+      await browser.close();
+      return;
+    }
+
+    await page.waitForTimeout(1500);
+  }
+
+  if (!onAssist) {
+    updateStatus('error', `❌ *Login GAGAL [${accountCode}]*\n\nTimeout (${MFA_WAIT_SECONDS}s) — tidak redirect ke ASSIST.\nMFA mungkin belum di-approve.\n\nCoba /relogin ${accountCode} lagi.`);
+    await browser.close();
+    return;
+  }
+
+  // ── Step 7: On ASSIST — poll localStorage for token (assist-bot method) ───
+  updateStatus('login', `✅ [${accountCode}] Login sukses — mengambil JWT...`);
+  await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => {});
+
+  let access_token = null, refresh_token = null, id_token = null;
+  const tokenDeadline = Date.now() + 20000;
+
+  while (Date.now() < tokenDeadline && !access_token) {
+    const storage = await page.evaluate(() => {
+      const dump = (s) => {
+        const out = {};
+        try { for (let i = 0; i < s.length; i++) { const k = s.key(i); out[k] = s.getItem(k); } } catch {}
+        return out;
+      };
+      return { local: dump(localStorage), session: dump(sessionStorage) };
+    });
+
+    // Method 1: oidc.user blob with access_token
+    for (const [k, v] of Object.entries(storage.local || {})) {
+      if (/oidc\.user/i.test(k) && typeof v === 'string') {
+        try {
+          const parsed = JSON.parse(v);
+          if (parsed.access_token) {
+            access_token = parsed.access_token;
+            refresh_token = parsed.refresh_token || null;
+            id_token = parsed.id_token || null;
+            break;
+          }
+        } catch {}
+      }
+    }
+    if (access_token) break;
+
+    // Method 2: any localStorage value containing a star_api JWT
+    for (const [k, v] of Object.entries(storage.local || {})) {
+      if (typeof v === 'string' && /eyJ[A-Za-z0-9_-]{20,}\.eyJ/.test(v)) {
+        const m = v.match(/eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/);
+        if (m) {
+          const p = decodeJwtPayload(m[0]);
+          if (p && JSON.stringify(p.aud || '').includes('star_api')) {
+            access_token = m[0];
+            break;
+          }
         }
       }
     }
+    if (access_token) break;
 
-    if (!access_token) {
-      throw new Error('Login completed but no star_api access_token captured');
+    // Method 3: sessionStorage
+    for (const [k, v] of Object.entries(storage.session || {})) {
+      if (typeof v === 'string' && /eyJ[A-Za-z0-9_-]{20,}\.eyJ/.test(v)) {
+        const m = v.match(/eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/);
+        if (m) {
+          const p = decodeJwtPayload(m[0]);
+          if (p && JSON.stringify(p.aud || '').includes('star_api')) {
+            access_token = m[0];
+            break;
+          }
+        }
+      }
     }
+    if (access_token) break;
 
-    // ── Step 9: Save JWT ─────────────────────────────────────────────────────
-    const jwtFile = VAULT.saveJwt(accountCode, access_token);
-    const exp = decodeJwtPayload(access_token);
-    const expStr = exp ? new Date(exp.exp * 1000).toLocaleString('id-ID', { timeZone: 'Asia/Makassar' }) : 'unknown';
+    await page.waitForTimeout(2000);
+  }
 
-    log(`✅ JWT saved to ${jwtFile}`);
-    log(`    expires: ${expStr}`);
-    sendTelegram(
-      `✅ *Login Star BERHASIL [${accountCode}]*\n\n` +
-      `Dealer  : ${account.dealerName}\n` +
-      `JWT file : ${jwtFile}\n` +
-      `Expires  : ${expStr}`
-    );
+  // Save auth-state for reference
+  try {
+    await ctx.storageState({ path: path.join(LOG_DIR, `auth-state-${accountCode}.json`) });
+  } catch {}
 
-    // ── Step 10: Set as active if this is the first/only account ─────────────
-    const accounts = VAULT.listAccounts();
-    if (accounts.length === 1) {
-      VAULT.setActiveAccount(accountCode);
-      log(`Set ${accountCode} as active account`);
-    }
+  await browser.close();
 
-    return { accountCode, jwtFile, expiresAt: expStr };
+  if (!access_token) {
+    updateStatus('error', `❌ *Login [${accountCode}]*\nLogin sukses tapi JWT tidak ter-capture di localStorage.\n\nCoba /relogin ${accountCode} lagi.`);
+    return;
+  }
 
-  } catch (err) {
-    log('❌ ERROR:', err.message);
-    sendTelegram(`❌ *Login Star GAGAL [${accountCode}]*\n\nError: ${err.message.slice(0, 400)}`);
+  // Save token file
+  const p = decodeJwtPayload(access_token);
+  fs.writeFileSync(tokenPath, JSON.stringify({
+    access_token, refresh_token, id_token,
+    savedAt: new Date().toISOString(),
+    name: p?.name, sub: p?.sub, exp: p?.exp,
+  }, null, 2));
 
-    // Save screenshot for debugging
+  const expStr = p?.exp ? new Date(p.exp * 1000).toLocaleString('id-ID', { timeZone: 'Asia/Makassar', dateStyle: 'medium', timeStyle: 'short' }) : '?';
+  updateStatus('login', `✅ [${accountCode}] JWT captured: ${p?.name}\nExp: ${expStr}`);
+
+  // ── Step 8: Verify token & save to vault ──────────────────────────────────
+  await verifyAndSaveToken(tokenPath);
+}
+
+
+async function extractTokenFromIdentity(page) {
+  // Navigate to identity domain to read its localStorage
+  try {
+    await page.goto('https://identity.star.astra.co.id/', { waitUntil: 'domcontentloaded', timeout: 10000 });
+    await page.waitForTimeout(2000);
+  } catch (e) {
+    updateStatus('login', `⚠️ Navigation to identity failed: ${e.message}`);
+  }
+
+  const storage = await page.evaluate(() => {
     try {
-      const errPng = path.join(LOG_DIR, `login-star-${accountCode}-error.png`);
-      await page.screenshot({ path: errPng, fullPage: true });
-      log('Saved error screenshot:', errPng);
-    } catch {}
+      const out = {};
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        out[k] = localStorage.getItem(k);
+      }
+      return out;
+    } catch { return {}; }
+  });
 
-    throw err;
-  } finally {
-    await browser.close();
+  for (const [k, v] of Object.entries(storage)) {
+    if (/oidc\.user.*star_api/i.test(k) && typeof v === 'string') {
+      try {
+        const parsed = JSON.parse(v);
+        if (parsed.access_token) {
+          const p = decodeJwtPayload(parsed.access_token);
+          if (p && p.exp && p.exp > Math.floor(Date.now() / 1000)) {
+            const data = {
+              access_token: parsed.access_token,
+              refresh_token: parsed.refresh_token || null,
+              id_token: parsed.id_token || null,
+              savedAt: new Date().toISOString(),
+              name: p.name,
+              sub: p.sub,
+              exp: p.exp,
+            };
+            fs.writeFileSync(tokenPath, JSON.stringify(data, null, 2));
+
+            const expStr = new Date(p.exp * 1000).toLocaleString('id-ID', {
+              timeZone: 'Asia/Makassar', dateStyle: 'medium', timeStyle: 'short'
+            });
+            updateStatus('done',
+              `✅ *Login BERHASIL [${accountCode}]*\n\n` +
+              `Nama: ${p.name}\n` +
+              `Exp : ${expStr}\n` +
+              `Source: identity.star.astra.co.id`
+            );
+            return;
+          }
+        }
+      } catch (e) {
+        updateStatus('login', `⚠️ Parse oidc token error: ${e.message}`);
+      }
+    }
+  }
+
+  // Fallback: read from storageState file
+  const ssPath = path.join(LOG_DIR, `auth-state-${accountCode}.json`);
+  if (fs.existsSync(ssPath)) {
+    try {
+      const ssData = JSON.parse(fs.readFileSync(ssPath, 'utf8'));
+      for (const origin of (ssData.origins || [])) {
+        for (const [k, v] of Object.entries(origin.localStorage || {})) {
+          if (/oidc.*star_api|star.*access/i.test(k) && typeof v === 'string' && v.length > 50) {
+            try {
+              const parsed = JSON.parse(v);
+              if (parsed.access_token) {
+                const p = decodeJwtPayload(parsed.access_token);
+                if (p && p.exp > Math.floor(Date.now() / 1000)) {
+                  const data = { access_token: parsed.access_token, refresh_token: parsed.refresh_token || null, id_token: parsed.id_token || null, savedAt: new Date().toISOString(), name: p.name, sub: p.sub, exp: p.exp };
+                  fs.writeFileSync(tokenPath, JSON.stringify(data, null, 2));
+                  const expStr = new Date(p.exp * 1000).toLocaleString('id-ID', { timeZone: 'Asia/Makassar', dateStyle: 'medium', timeStyle: 'short' });
+                  updateStatus('done', `✅ *Login BERHASIL [${accountCode}]*\n\nNama: ${p.name}\nExp : ${expStr}\nSource: storageState fallback`);
+                  return;
+                }
+              }
+            } catch {}
+          }
+        }
+      }
+    } catch (e) {}
+  }
+
+  updateStatus('error', `⚠️ *Login [${accountCode}]*\nToken tidak ditemukan di localStorage.\n\nSudah di-redirect ke ASSIST tapi JWT tidak ter-capture.\n\nCoba /relogin ${accountCode} lagi.`);
+}
+
+async function verifyAndSaveToken(tokenPath) {
+  if (!fs.existsSync(tokenPath)) {
+    updateStatus('error', `❌ Token file not found: ${tokenPath}`);
+    return;
+  }
+  try {
+    const data = JSON.parse(fs.readFileSync(tokenPath, 'utf8'));
+    if (!data.access_token) throw new Error('No access_token in token file');
+
+    // Verify it works
+    const { execSync: ex } = require('child_process');
+    const testBody = JSON.stringify({ query: '{ __typename }' });
+    const escaped = testBody.replace(/'/g, "'\\''");
+    const cmd = `curl -s --max-time 10 '${STAR_API}' ` +
+      `-H 'Authorization: Bearer ${data.access_token}' ` +
+      `-H 'Content-Type: application/json' ` +
+      `-d '${escaped}'`;
+    const out = ex(cmd, { encoding: 'utf8' });
+    const resp = JSON.parse(out);
+    if (resp.errors) {
+      updateStatus('error', `❌ Token invalid — API error: ${resp.errors[0].message}`);
+      return;
+    }
+
+    // Save to vault
+    const expDate = new Date(data.exp * 1000).toLocaleString('id-ID', {
+      timeZone: 'Asia/Makassar', dateStyle: 'medium', timeStyle: 'short'
+    });
+    VAULT.saveJwt(accountCode, data.access_token);
+    updateStatus('done',
+      `✅ *Login & Verifikasi BERHASIL*\n\n` +
+      `Token tersimpan di vault.\n` +
+      `Nama : ${data.name}\n` +
+      `Exp  : ${expDate}\n\n` +
+      `Sesi login sudah selesai!`
+    );
+  } catch (e) {
+    updateStatus('error', `❌ Verifikasi gagal: ${e.message}`);
   }
 }
 
-// ─── Entry point ──────────────────────────────────────────────────────────────
-runLogin()
-  .then(() => process.exit(0))
-  .catch((e) => {
-    console.error(e);
-    process.exit(1);
-  });
+// ─── Run ────────────────────────────────────────────────────────────────────
+updateStatus('login', `🚀 Starting login for ${accountCode}...`);
+runLogin().then(() => {
+  updateStatus('done', `Login process finished for ${accountCode}.`);
+  process.exit(0);
+}).catch(err => {
+  updateStatus('error', `❌ *Login ERROR [${accountCode}]*\n\n${err.message}`);
+  process.exit(1);
+});
