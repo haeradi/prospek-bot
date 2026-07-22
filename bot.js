@@ -261,12 +261,16 @@ const convGet = (chatId) => conv.get(chatId);
 
 // ====== KEYBOARDS ======
 
-// Back-to-menu button — appears at bottom of EVERY result message (like h704-bot)
-// h704-bot uses Reply Keyboard (keyboard: [...]) not inline keyboard
-// Reply keyboard persists at bottom of screen, always visible
-const backToMenu = () => ({
+// ====== REPLY KEYBOARD — persistent menu like h704-bot ======
+// Reply keyboard stays at bottom of Telegram screen at ALL times
+const replyKeyboard = () => ({
   reply_markup: {
-    keyboard: [[{ text: '🔙 Menu Utama' }]],
+    keyboard: [
+      [{ text: '📝 Prospek LOW' }, { text: '📝 Prospek MEDIUM' }, { text: '📝 Prospek HOT' }],
+      [{ text: '⬆️ Upgrade Status' }, { text: '📋 Cari Prospek' }],
+      [{ text: '📊 FF / Excel' }, { text: '🔑 Set JWT' }],
+      [{ text: '🚫 Bulk Not Deal' }, { text: '🔐 Akun' }],
+    ],
     resize_keyboard: true,
     one_time_keyboard: false,
   }
@@ -716,39 +720,8 @@ bot.onText(/^\/aktivitas(?:\s+(\S+))?$/, async (msg, match) => {
 
     await bot.sendMessage(msg.chat.id, text, { parse_mode: 'Markdown' });
 
-    // Menu as SEPARATE plain message + inline keyboard BELOW (no parse_mode conflict)
-    const menuText = [
-      '━━━ MENU ━━━',
-      '',
-      '📝 Prospek LOW   → buat prospek baru level LOW',
-      '📝 Prospek MEDIUM → buat prospek baru level MEDIUM',
-      '📝 Prospek HOT   → buat prospek baru level HOT',
-      '⬆️ Upgrade Status  → naikkan level prospek',
-      '📋 Cari Prospek  → cari data prospek',
-      '📊 FF / Excel    → input dari spreadsheet',
-      '🔑 Set JWT       → input manual JWT',
-      '🚫 Bulk Not Deal → bulk update NOT DEAL',
-      '🔐 Akun         → kelola akun Star API',
-    ].join('\n');
-    await bot.sendMessage(msg.chat.id, menuText);
-
-    // Inline keyboard BELOW menu text (separate message — always visible)
-    const bottomKeyboard = {
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: '📝 Prospek LOW', callback_data: 'create:LOW' },
-           { text: '📝 Prospek MEDIUM', callback_data: 'create:MEDIUM' },
-           { text: '📝 Prospek HOT', callback_data: 'create:HOT' }],
-          [{ text: '⬆️ Upgrade Status', callback_data: 'upgrade:menu' },
-           { text: '📋 Cari Prospek', callback_data: 'search:menu' }],
-          [{ text: '📊 FF / Excel', callback_data: 'ff:menu' },
-           { text: '🔑 Set JWT', callback_data: 'setjwt' }],
-          [{ text: '🚫 Bulk Not Deal', callback_data: 'notdeal:menu' },
-           { text: '🔐 Akun', callback_data: 'accounts:menu' }],
-        ]
-      }
-    };
-    await bot.sendMessage(msg.chat.id, '👆 Gunakan tombol di bawah:', bottomKeyboard);
+    // Reply Keyboard persistent menu at bottom (like h704-bot)
+    await bot.sendMessage(msg.chat.id, '━━━ MENU ━━━', replyKeyboard());
   } catch (e) {
     const jwt = SA.verifyJwt();
     let hint = '';
@@ -758,11 +731,7 @@ bot.onText(/^\/aktivitas(?:\s+(\S+))?$/, async (msg, match) => {
       hint = `\n\n❌ JWT: ${jwt.error || 'invalid'}`;
     }
     await bot.sendMessage(msg.chat.id, `❌ Gagal ambil data aktivitas.\n\n${e.message}${hint}`, { parse_mode: 'Markdown' });
-    await bot.sendMessage(msg.chat.id, '👆 Menu Utama ↓', {
-      reply_markup: {
-        inline_keyboard: [[{ text: '🔙 Menu Utama', callback_data: 'menu' }]]
-      }
-    });
+    await bot.sendMessage(msg.chat.id, '━━━ MENU ━━━', replyKeyboard());
   }
 });
 
@@ -2261,18 +2230,28 @@ function checkEom() {
 }
 
 // ====== REPLY KEYBOARD HANDLER ======
-// Handles "🔙 Menu Utama" button pressed from reply keyboard (like h704-bot)
+// Handles Reply Keyboard buttons tapped by user (text-based, not callback_data)
 bot.on('message', (msg) => {
   if (!msg.text) return;
-  if (msg.text.startsWith('/')) return; // Skip commands
+  if (msg.text.startsWith('/')) return;
 
-  if (msg.text === '🔙 Menu Utama') {
-    conv.delete(msg.chat.id);
-    auditLog('menu_utama_reply', { chatId: msg.chat.id });
-    bot.sendMessage(msg.chat.id,
-      '👋 *Menu Utama*',
-      { parse_mode: 'Markdown', ...mainMenu }
-    );
+  // Route to callback equivalents
+  const routes = {
+    '📝 Prospek LOW':      'create:LOW',
+    '📝 Prospek MEDIUM':   'create:MEDIUM',
+    '📝 Prospek HOT':      'create:HOT',
+    '⬆️ Upgrade Status':   'upgrade:menu',
+    '📋 Cari Prospek':     'search:menu',
+    '📊 FF / Excel':       'ff:menu',
+    '🔑 Set JWT':          'setjwt',
+    '🚫 Bulk Not Deal':    'notdeal:menu',
+    '🔐 Akun':             'accounts:menu',
+  };
+
+  const cbData = routes[msg.text];
+  if (cbData) {
+    // Pretend it's a callback — call handleCallback
+    handleCallback(cbData, msg.chat.id, null, null);
   }
 });
 
