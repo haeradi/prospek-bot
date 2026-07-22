@@ -702,7 +702,10 @@ bot.onText(/^\/aktivitas(?:\s+(\S+))?$/, async (msg, match) => {
       text = SA.formatActivityReportV2(report);
     }
 
-    await bot.sendMessage(msg.chat.id, text, mainMenu);
+    await bot.sendMessage(msg.chat.id, text, { parse_mode: 'Markdown' });
+
+    // Always send menu as SEPARATE message below the report (guaranteed visible)
+    await bot.sendMessage(msg.chat.id, '━━━ MENU ━━━', mainMenu);
   } catch (e) {
     const jwt = SA.verifyJwt();
     let hint = '';
@@ -711,7 +714,8 @@ bot.onText(/^\/aktivitas(?:\s+(\S+))?$/, async (msg, match) => {
     } else {
       hint = `\n\n❌ JWT: ${jwt.error || 'invalid'}`;
     }
-    await bot.sendMessage(msg.chat.id, `❌ Gagal ambil data aktivitas.\n\n${e.message}${hint}`, mainMenu);
+    await bot.sendMessage(msg.chat.id, `❌ Gagal ambil data aktivitas.\n\n${e.message}${hint}`, { parse_mode: 'Markdown' });
+    await bot.sendMessage(msg.chat.id, '━━━ MENU ━━━', mainMenu);
   }
 });
 
