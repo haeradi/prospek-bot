@@ -716,8 +716,7 @@ bot.onText(/^\/aktivitas(?:\s+(\S+))?$/, async (msg, match) => {
 
     await bot.sendMessage(msg.chat.id, text, { parse_mode: 'Markdown' });
 
-    // Menu as SEPARATE text message first, then Reply Keyboard "🔙 Menu Utama"
-    // Reply keyboard persists at bottom of screen (like h704-bot)
+    // Menu as SEPARATE plain message + inline keyboard BELOW (no parse_mode conflict)
     const menuText = [
       '━━━ MENU ━━━',
       '',
@@ -732,7 +731,24 @@ bot.onText(/^\/aktivitas(?:\s+(\S+))?$/, async (msg, match) => {
       '🔐 Akun         → kelola akun Star API',
     ].join('\n');
     await bot.sendMessage(msg.chat.id, menuText);
-    await bot.sendMessage(msg.chat.id, '👆 Gunakan tombol Menu Utama di bawah untuk kembali', backToMenu());
+
+    // Inline keyboard BELOW menu text (separate message — always visible)
+    const bottomKeyboard = {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '📝 Prospek LOW', callback_data: 'create:LOW' },
+           { text: '📝 Prospek MEDIUM', callback_data: 'create:MEDIUM' },
+           { text: '📝 Prospek HOT', callback_data: 'create:HOT' }],
+          [{ text: '⬆️ Upgrade Status', callback_data: 'upgrade:menu' },
+           { text: '📋 Cari Prospek', callback_data: 'search:menu' }],
+          [{ text: '📊 FF / Excel', callback_data: 'ff:menu' },
+           { text: '🔑 Set JWT', callback_data: 'setjwt' }],
+          [{ text: '🚫 Bulk Not Deal', callback_data: 'notdeal:menu' },
+           { text: '🔐 Akun', callback_data: 'accounts:menu' }],
+        ]
+      }
+    };
+    await bot.sendMessage(msg.chat.id, '👆 Gunakan tombol di bawah:', bottomKeyboard);
   } catch (e) {
     const jwt = SA.verifyJwt();
     let hint = '';
@@ -742,7 +758,11 @@ bot.onText(/^\/aktivitas(?:\s+(\S+))?$/, async (msg, match) => {
       hint = `\n\n❌ JWT: ${jwt.error || 'invalid'}`;
     }
     await bot.sendMessage(msg.chat.id, `❌ Gagal ambil data aktivitas.\n\n${e.message}${hint}`, { parse_mode: 'Markdown' });
-    await bot.sendMessage(msg.chat.id, '👆 Menu Utama ↓', backToMenu());
+    await bot.sendMessage(msg.chat.id, '👆 Menu Utama ↓', {
+      reply_markup: {
+        inline_keyboard: [[{ text: '🔙 Menu Utama', callback_data: 'menu' }]]
+      }
+    });
   }
 });
 
