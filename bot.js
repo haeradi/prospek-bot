@@ -260,6 +260,18 @@ const convSet = (chatId, state) => {
 const convGet = (chatId) => conv.get(chatId);
 
 // ====== KEYBOARDS ======
+
+// Back-to-menu button — appears at bottom of EVERY result message (like h704-bot)
+// h704-bot uses Reply Keyboard (keyboard: [...]) not inline keyboard
+// Reply keyboard persists at bottom of screen, always visible
+const backToMenu = () => ({
+  reply_markup: {
+    keyboard: [[{ text: '🔙 Menu Utama' }]],
+    resize_keyboard: true,
+    one_time_keyboard: false,
+  }
+});
+
 const mainMenu = {
   reply_markup: {
     inline_keyboard: [
@@ -704,7 +716,8 @@ bot.onText(/^\/aktivitas(?:\s+(\S+))?$/, async (msg, match) => {
 
     await bot.sendMessage(msg.chat.id, text, { parse_mode: 'Markdown' });
 
-    // Menu as SEPARATE text message below (guaranteed visible in all Telegram clients)
+    // Menu as SEPARATE text message first, then Reply Keyboard "🔙 Menu Utama"
+    // Reply keyboard persists at bottom of screen (like h704-bot)
     const menuText = [
       '━━━ MENU ━━━',
       '',
@@ -719,6 +732,7 @@ bot.onText(/^\/aktivitas(?:\s+(\S+))?$/, async (msg, match) => {
       '🔐 Akun         → kelola akun Star API',
     ].join('\n');
     await bot.sendMessage(msg.chat.id, menuText);
+    await bot.sendMessage(msg.chat.id, '👆 Gunakan tombol Menu Utama di bawah untuk kembali', backToMenu());
   } catch (e) {
     const jwt = SA.verifyJwt();
     let hint = '';
@@ -728,13 +742,7 @@ bot.onText(/^\/aktivitas(?:\s+(\S+))?$/, async (msg, match) => {
       hint = `\n\n❌ JWT: ${jwt.error || 'invalid'}`;
     }
     await bot.sendMessage(msg.chat.id, `❌ Gagal ambil data aktivitas.\n\n${e.message}${hint}`, { parse_mode: 'Markdown' });
-    await bot.sendMessage(msg.chat.id, [
-      '━━━ MENU ━━━',
-      '📝 Prospek LOW | MEDIUM | HOT',
-      '⬆️ Upgrade Status | 📋 Cari Prospek',
-      '📊 FF / Excel | 🔑 Set JWT',
-      '🚫 Bulk Not Deal | 🔐 Akun',
-    ].join('\n'));
+    await bot.sendMessage(msg.chat.id, '👆 Menu Utama ↓', backToMenu());
   }
 });
 
@@ -2231,6 +2239,22 @@ function checkEom() {
     runEomReset();
   }
 }
+
+// ====== REPLY KEYBOARD HANDLER ======
+// Handles "🔙 Menu Utama" button pressed from reply keyboard (like h704-bot)
+bot.on('message', (msg) => {
+  if (!msg.text) return;
+  if (msg.text.startsWith('/')) return; // Skip commands
+
+  if (msg.text === '🔙 Menu Utama') {
+    conv.delete(msg.chat.id);
+    auditLog('menu_utama_reply', { chatId: msg.chat.id });
+    bot.sendMessage(msg.chat.id,
+      '👋 *Menu Utama*',
+      { parse_mode: 'Markdown', ...mainMenu }
+    );
+  }
+});
 
 // ====== START ======
 checkEom();
