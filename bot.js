@@ -259,23 +259,7 @@ const convSet = (chatId, state) => {
 };
 const convGet = (chatId) => conv.get(chatId);
 
-// ====== KEYBOARDS ======
-
-// ====== REPLY KEYBOARD — persistent menu like h704-bot ======
-// Reply keyboard stays at bottom of Telegram screen at ALL times
-const replyKeyboard = () => ({
-  reply_markup: {
-    keyboard: [
-      [{ text: '📝 Prospek LOW' }, { text: '📝 Prospek MEDIUM' }, { text: '📝 Prospek HOT' }],
-      [{ text: '⬆️ Upgrade Status' }, { text: '📋 Cari Prospek' }],
-      [{ text: '📊 FF / Excel' }, { text: '🔑 Set JWT' }],
-      [{ text: '🚫 Bulk Not Deal' }, { text: '🔐 Akun' }],
-    ],
-    resize_keyboard: true,
-    one_time_keyboard: false,
-  }
-});
-
+// ====== MENU UTAMA (inline — untuk callback query dan error state) ======
 const mainMenu = {
   reply_markup: {
     inline_keyboard: [
@@ -291,6 +275,24 @@ const mainMenu = {
     ]
   }
 };
+
+// ====== REPLY KEYBOARD — persistent menu, tombol selalu di bawah layar ======
+// Semua command harus pakai replyKeyboard() agar tombol PERSISTENT
+const replyKeyboard = () => ({
+  reply_markup: {
+    keyboard: [
+      [{ text: '📝 Prospek LOW' }, { text: '📝 Prospek MEDIUM' }, { text: '📝 Prospek HOT' }],
+      [{ text: '⬆️ Upgrade Status' }, { text: '📋 Cari Prospek' }],
+      [{ text: '📊 FF / Excel' }, { text: '🔑 Set JWT' }],
+      [{ text: '🚫 Bulk Not Deal' }, { text: '🔐 Akun' }],
+    ],
+    resize_keyboard: true,
+    one_time_keyboard: false,
+  }
+});
+
+// Helper: gabungkan parse_mode + replyKeyboard ke satu objek options
+const withReplyKeyboard = (opts = {}) => ({ ...opts, ...replyKeyboard() });
 
 const cancelBtn = () => ({ reply_markup: { inline_keyboard: [[{ text: '⬅️ Batal', callback_data: 'cancel' }]] } });
 const backBtn = (cb) => ({ reply_markup: { inline_keyboard: [[{ text: '⬅️ Kembali', callback_data: cb }]] } });
@@ -574,7 +576,7 @@ bot.onText(/^\/start/, async (msg) => {
     + `⬆️ Status bisa naik (LOW→MEDIUM→HOT→DEAL), tidak bisa turun.\n`
     + `🔴 Akhir bulan: prospek non-DEAL jadi LOST.\n\n`
     + `JWT: *${jwtName()}*`,
-    { parse_mode: 'Markdown', ...mainMenu }
+    { parse_mode: 'Markdown', ...replyKeyboard() }
   );
 });
 
@@ -582,13 +584,13 @@ bot.onText(/^\/start/, async (msg) => {
 bot.onText(/^\/jwt\s+(.+)/, async (msg, match) => {
   const token = match[1].trim();
   const claims = decodeJwt(token);
-  if (!claims) return bot.sendMessage(msg.chat.id, '❌ Token tidak valid.');
+  if (!claims) return bot.sendMessage(msg.chat.id, '❌ Token tidak valid.', replyKeyboard());
   jwt = token;
   fs.writeFileSync(JWT_FILE, jwt);
   auditLog('setjwt', { chatId: msg.chat.id, name: claims.name });
   await bot.sendMessage(msg.chat.id,
     `✅ JWT tersimpan!\n👤 ${claims.name} (${claims.email})\n⏳ Exp: ${new Date(claims.exp*1000).toLocaleString('id-ID', {timeZone:'Asia/Makassar',hour12:false})} WITA`,
-    mainMenu);
+    replyKeyboard());
 });
 
 // ── Account group helpers ───────────────────────────────────────────────────────────
@@ -859,7 +861,7 @@ bot.on('callback_query', async (q) => {
       const st = VAULT.jwtStatus(code);
       const expStr = st.expiresAt ? new Date(st.expiresAt).toLocaleString('id-ID', { timeZone: 'Asia/Makassar', hour12: false }) : '?';
       await bot.sendMessage(chatId, `✅ JWT ${code} aktif. Expires: ${expStr}`);
-      return editMsg(chatId, msgId, '👋 Menu Utama', mainMenu);
+      return bot.sendMessage(chatId, '👋 Menu Utama', replyKeyboard());
     } catch (e) {
       return editMsg(chatId, msgId, `❌ Gagal: ${e.message}`, backBtn('accounts:detail:' + code));
     }
@@ -966,13 +968,13 @@ bot.on('callback_query', async (q) => {
   // --- CANCEL ---
   if (data === 'cancel') {
     conv.delete(chatId);
-    return editMsg(chatId, msgId, '❌ Dibatalkan.', mainMenu);
+    return bot.sendMessage(chatId, '❌ Dibatalkan.', replyKeyboard());
   }
 
   // --- BACK TO MENU ---
   if (data === 'menu') {
     conv.delete(chatId);
-    return editMsg(chatId, msgId, '👋 *Menu Utama*', mainMenu);
+    return bot.sendMessage(chatId, '👋 *Menu Utama*', { parse_mode: 'Markdown', ...replyKeyboard() });
   }
 
   // --- STATUS ---
@@ -1010,7 +1012,7 @@ bot.on('callback_query', async (q) => {
     auditLog('ff_submit_all', { chatId });
     const s = convGet(chatId);
     if (!s || s.step !== 'ff_confirm' || !s.ff_data) {
-      return editMsg(chatId, msgId, '❌ Session expired. Mulai ulang dari menu.', mainMenu);
+      return bot.sendMessage(chatId, '❌ Session expired. Mulai ulang dari menu.', replyKeyboard());
     }
     
     const results = s.ff_data;
@@ -1180,13 +1182,13 @@ bot.on('callback_query', async (q) => {
     }
     
     conv.delete(chatId);
-    return bot.sendMessage(chatId, resultTxt, { parse_mode: 'Markdown', ...mainMenu });
+    return bot.sendMessage(chatId, resultTxt, { parse_mode: 'Markdown', ...replyKeyboard() });
   }
   
   // --- FF CANCEL ---
   if (c && c.step && c.step.startsWith('ff_') && data === 'cancel') {
     conv.delete(chatId);
-    return editMsg(chatId, msgId, '❌ FF/Excel dibatalkan.', mainMenu);
+    return bot.sendMessage(chatId, '❌ FF/Excel dibatalkan.', replyKeyboard());
   }
 
   // --- CREATE PROSPEK ---
@@ -1273,7 +1275,7 @@ bot.on('callback_query', async (q) => {
       if (address) txt += `\n📍 ${address}`;
       txt += `\n📊 *${result.prospectStatus}*`;
       conv.delete(chatId);
-      return editMsg(chatId, msgId, txt, mainMenu);
+      return bot.sendMessage(chatId, txt, replyKeyboard());
     } catch (e) {
       return editMsg(chatId, msgId, `❌ *Gagal:* ${e.message}`, confirmBtn());
     }
@@ -1333,7 +1335,7 @@ bot.on('callback_query', async (q) => {
         }
         const txt = `✅ *Status berhasil diupdate!*\n📊 ${s.curStatus} → *${r.prospectStatus}*`;
         conv.delete(chatId);
-        return editMsg(chatId, msgId, txt, mainMenu);
+        return bot.sendMessage(chatId, txt, replyKeyboard());
       } catch (e) {
         return editMsg(chatId, msgId, `❌ Gagal: ${e.message}`, backBtn('upgrade:menu'));
       }
@@ -1503,7 +1505,7 @@ bot.on('callback_query', async (q) => {
   // --- NOT DEAL: EXECUTE ---
   if (data === 'notdeal:do') {
     const s = convGet(chatId) || {};
-    if (!s.notdeal_reason) return editMsg(chatId, msgId, '❌ Session expired.', mainMenu);
+    if (!s.notdeal_reason) return bot.sendMessage(chatId, '❌ Session expired.', replyKeyboard());
 
     const reason = 'TIDAK_BERMINAT';
     const targetStatus = s.notdeal_status;
@@ -1559,7 +1561,7 @@ bot.on('callback_query', async (q) => {
 
           if (!pi.hasNextPage) { hasMore = false; break; }
         } catch (e) {
-          return editMsg(chatId, msgId, `❌ Error fetch ${st}: ${e.message}`, mainMenu);
+          return bot.sendMessage(chatId, `❌ Error fetch ${st}: ${e.message}`, replyKeyboard());
         }
       }
     }
@@ -1593,7 +1595,7 @@ bot.on('callback_query', async (q) => {
     }
     resultTxt += `\\n─────────────────────\\n`;
     resultTxt += `_Diupdate oleh @Rd_prospek_bot_`;
-    return bot.sendMessage(chatId, resultTxt, { parse_mode: 'Markdown', ...mainMenu });
+    return bot.sendMessage(chatId, resultTxt, { parse_mode: 'Markdown', ...replyKeyboard() });
   }
 });
 
@@ -2178,6 +2180,29 @@ bot.on('message', async (msg) => {
       return bot.sendMessage(chatId, `✅ Dealer untuk ${s.code} diupdate.`, backBtn('accounts:detail:' + s.code));
     } catch (e) { return bot.sendMessage(chatId, `❌ Gagal: ${e.message}`, cancelBtn()); }
   }
+});
+
+// ====== REPLY KEYBOARD HANDLER — routes tapped menu buttons to actions ======
+// Runs AFTER conversation handlers (convGet check) so it only catches free-tap buttons
+bot.on('message', (msg) => {
+  if (!msg.text) return;
+  const text = msg.text.trim();
+  const chatId = msg.chat.id;
+  const s = convGet(chatId);
+
+  // If user is in a conversation, let conversation handler deal with it
+  if (s) return;
+
+  // Route Reply Keyboard button taps → callback action equivalent
+  if (text === '📝 Prospek LOW')        return bot.emit('callback_query', { id: 'rk', message: { chat: { id: chatId }, message_id: msg.message_id }, data: 'create:LOW' });
+  if (text === '📝 Prospek MEDIUM')     return bot.emit('callback_query', { id: 'rk', message: { chat: { id: chatId }, message_id: msg.message_id }, data: 'create:MEDIUM' });
+  if (text === '📝 Prospek HOT')        return bot.emit('callback_query', { id: 'rk', message: { chat: { id: chatId }, message_id: msg.message_id }, data: 'create:HOT' });
+  if (text === '⬆️ Upgrade Status')      return bot.emit('callback_query', { id: 'rk', message: { chat: { id: chatId }, message_id: msg.message_id }, data: 'upgrade:menu' });
+  if (text === '📋 Cari Prospek')       return bot.emit('callback_query', { id: 'rk', message: { chat: { id: chatId }, message_id: msg.message_id }, data: 'search:menu' });
+  if (text === '📊 FF / Excel')         return bot.emit('callback_query', { id: 'rk', message: { chat: { id: chatId }, message_id: msg.message_id }, data: 'ff:menu' });
+  if (text === '🔑 Set JWT')           return bot.emit('callback_query', { id: 'rk', message: { chat: { id: chatId }, message_id: msg.message_id }, data: 'setjwt' });
+  if (text === '🚫 Bulk Not Deal')     return bot.emit('callback_query', { id: 'rk', message: { chat: { id: chatId }, message_id: msg.message_id }, data: 'notdeal:menu' });
+  if (text === '🔐 Akun')              return bot.emit('callback_query', { id: 'rk', message: { chat: { id: chatId }, message_id: msg.message_id }, data: 'accounts:menu' });
 });
 
 // ====== SHOW PREVIEW ======
