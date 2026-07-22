@@ -704,8 +704,21 @@ bot.onText(/^\/aktivitas(?:\s+(\S+))?$/, async (msg, match) => {
 
     await bot.sendMessage(msg.chat.id, text, { parse_mode: 'Markdown' });
 
-    // Always send menu as SEPARATE message below the report (guaranteed visible)
-    await bot.sendMessage(msg.chat.id, '━━━ MENU ━━━', mainMenu);
+    // Menu as SEPARATE text message below (guaranteed visible in all Telegram clients)
+    const menuText = [
+      '━━━ MENU ━━━',
+      '',
+      '📝 Prospek LOW   → buat prospek baru level LOW',
+      '📝 Prospek MEDIUM → buat prospek baru level MEDIUM',
+      '📝 Prospek HOT   → buat prospek baru level HOT',
+      '⬆️ Upgrade Status  → naikkan level prospek',
+      '📋 Cari Prospek  → cari data prospek',
+      '📊 FF / Excel    → input dari spreadsheet',
+      '🔑 Set JWT       → input manual JWT',
+      '🚫 Bulk Not Deal → bulk update NOT DEAL',
+      '🔐 Akun         → kelola akun Star API',
+    ].join('\n');
+    await bot.sendMessage(msg.chat.id, menuText);
   } catch (e) {
     const jwt = SA.verifyJwt();
     let hint = '';
@@ -715,7 +728,13 @@ bot.onText(/^\/aktivitas(?:\s+(\S+))?$/, async (msg, match) => {
       hint = `\n\n❌ JWT: ${jwt.error || 'invalid'}`;
     }
     await bot.sendMessage(msg.chat.id, `❌ Gagal ambil data aktivitas.\n\n${e.message}${hint}`, { parse_mode: 'Markdown' });
-    await bot.sendMessage(msg.chat.id, '━━━ MENU ━━━', mainMenu);
+    await bot.sendMessage(msg.chat.id, [
+      '━━━ MENU ━━━',
+      '📝 Prospek LOW | MEDIUM | HOT',
+      '⬆️ Upgrade Status | 📋 Cari Prospek',
+      '📊 FF / Excel | 🔑 Set JWT',
+      '🚫 Bulk Not Deal | 🔐 Akun',
+    ].join('\n'));
   }
 });
 
