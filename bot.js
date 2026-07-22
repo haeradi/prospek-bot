@@ -31,6 +31,36 @@ function currentJwtUuid() {
   return decodeJwtUuid(jwt) || '';
 }
 
+// ====== AUDIT LOG ======
+const LOG_DIR = path.join(__dirname, 'logs');
+const AUDIT_FILE = path.join(LOG_DIR, 'audit.log');
+
+function logAudit(action, details = {}) {
+  try {
+    const entry = {
+      ts: new Date().toISOString(),
+      tz: 'Asia/Makassar',
+      action,
+      jwtOwner: (() => { try { const p = JSON.parse(Buffer.from(jwt.split('.')[1],'base64').toString('utf8')); return p.name || '?'; } catch { return '?'; } })(),
+      chatId: null, // set per-call below
+      ...details,
+    };
+    const line = JSON.stringify(entry) + '\n';
+    if (!existsSync(LOG_DIR)) return;
+    fs.appendFileSync(AUDIT_FILE, line);
+  } catch {}
+}
+
+function auditLog(action, details = {}, chatId = null) {
+  try {
+    const p = { ts: new Date().toISOString(), tz: 'Asia/Makassar', action, chatId,
+      jwtOwner: (() => { try { const pp = JSON.parse(Buffer.from(jwt.split('.')[1],'base64').toString('utf8')); return pp.name || '?'; } catch { return '?'; } })(),
+      ...details };
+    if (!existsSync(LOG_DIR)) return;
+    fs.appendFileSync(AUDIT_FILE, JSON.stringify(p) + '\n');
+  } catch {}
+}
+
 // ====== STAR API ======
 const STAR_API = 'https://api.star.astra.co.id/graphql/';
 const ORIGIN   = 'https://assist.star.astra.co.id';
@@ -47,6 +77,15 @@ const callStar = (query, vars) => {
     `-H 'referer: ${ORIGIN}/' ` +
     `-H 'user-agent: Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Mobile Safari/537.36' ` +
     `-d '${escaped}'`;
+  // Audit: log all Star API mutations (create/update prospect, follow-up, status)
+  try {
+    if (query.includes('mutation')) {
+      const name = query.match(/mutation\s+(\w+)/)?.[1] || '?';
+      const keys = Object.keys(vars?.data || {}).slice(0, 4).join(',');
+      auditLog('star_mutation', { mutation: name, fields: keys });
+    }
+  } catch {}
+
   let stdout;
   try {
     stdout = execSync(cmd, { encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 });
@@ -509,6 +548,7 @@ const updateStatus = (prospectId, status) => {
 // ====== /start ======
 bot.onText(/^\/start/, async (msg) => {
   conv.delete(msg.chat.id);
+  auditLog('start', { chatId: msg.chat.id, username: msg.from.username });
   await bot.sendMessage(msg.chat.id,
     `👋 *Prospek Bot — Astra Motor Penajam*\n\n`
     + `📌 *Level Prospek:*\n`
@@ -529,6 +569,7 @@ bot.onText(/^\/jwt\s+(.+)/, async (msg, match) => {
   if (!claims) return bot.sendMessage(msg.chat.id, '❌ Token tidak valid.');
   jwt = token;
   fs.writeFileSync(JWT_FILE, jwt);
+  auditLog('setjwt', { chatId: msg.chat.id, name: claims.name });
   await bot.sendMessage(msg.chat.id,
     `✅ JWT tersimpan!\n👤 ${claims.name} (${claims.email})\n⏳ Exp: ${new Date(claims.exp*1000).toLocaleString('id-ID', {timeZone:'Asia/Makassar',hour12:false})} WITA`,
     mainMenu);
@@ -645,6 +686,7 @@ bot.onText(/^\/accounts/, async (msg) => {
 // ── /aktivitas — Clock-in/out activities from Star API ─────────────────────
 bot.onText(/^\/aktivitas(?:\s+(\S+))?$/, async (msg, match) => {
   const sub = (match[1] || '').toUpperCase();
+  auditLog('aktivitas', { chatId: msg.chat.id, sub: sub || 'ALL' });
   await bot.sendMessage(msg.chat.id, '⏳ Mengambil data aktivitas dari Star API...', { parse_mode: 'HTML' });
 
   try {
@@ -656,20 +698,20 @@ bot.onText(/^\/aktivitas(?:\s+(\S+))?$/, async (msg, match) => {
     } else if (sub === 'BTL') {
       text = SA.formatBTLReport(report);
     } else {
-      text = SA.formatActivityReport(report);
+      // Default: combined BTL + POS, grouped by status (clean WA-friendly)
+      text = SA.formatActivityReportV2(report);
     }
 
-    await bot.sendMessage(msg.chat.id, text);
+    await bot.sendMessage(msg.chat.id, text, mainMenu);
   } catch (e) {
-    // Show JWT status on failure
     const jwt = SA.verifyJwt();
-    let status = '';
+    let hint = '';
     if (jwt.ok) {
-      status = `\n\nJWT: ✅ ${jwt.name}\nExp: ${jwt.exp} (${jwt.remaining} remaining)`;
+      hint = `\n\nJWT: ✅ ${jwt.name} | Exp: ${jwt.exp} (${jwt.remaining})`;
     } else {
-      status = `\n\n❌ JWT Error: ${jwt.error || 'expired/invalid'}`;
+      hint = `\n\n❌ JWT: ${jwt.error || 'invalid'}`;
     }
-    await bot.sendMessage(msg.chat.id, `❌ Gagal mengambil data.\n\nError: ${e.message}${status}`);
+    await bot.sendMessage(msg.chat.id, `❌ Gagal ambil data aktivitas.\n\n${e.message}${hint}`, mainMenu);
   }
 });
 
@@ -791,6 +833,7 @@ bot.on('callback_query', async (q) => {
   if (data.startsWith('accounts:use:')) {
     const code = data.split(':')[2];
     try {
+      auditLog('switch_account', { chatId, code, msgId });
       VAULT.setActiveAccount(code);
       jwt = fs.readFileSync(JWT_FILE, 'utf8').trim();
       const st = VAULT.jwtStatus(code);
@@ -944,6 +987,7 @@ bot.on('callback_query', async (q) => {
 
   // --- FF SUBMIT ALL ---
   if (data === 'ff:submit_all') {
+    auditLog('ff_submit_all', { chatId });
     const s = convGet(chatId);
     if (!s || s.step !== 'ff_confirm' || !s.ff_data) {
       return editMsg(chatId, msgId, '❌ Session expired. Mulai ulang dari menu.', mainMenu);
@@ -1449,6 +1493,7 @@ bot.on('callback_query', async (q) => {
     const counts = s._ndCounts || {};
 
     await bot.answerCallbackQuery(q.id, { text: '⏳ Memproses... Processing...' });
+    auditLog('notdeal_confirm', { chatId, status: s.notdeal_status, counts });
 
     const MUT_ND = `mutation UpdateStatus($data: UpdateCustomerProspectStatusInputFromCustomers!) {
       ensureUpdateCustomerProspectStatusFromCustomers(input: $data) { id name prospectStatus }

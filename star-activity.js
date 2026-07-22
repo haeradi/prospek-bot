@@ -1,14 +1,11 @@
 // star-activity.js — Fetch activities + staff clock-in/out from Star API
-// Uses H704 JWT (ABDUL RAHMADAN) — reads from h704-bot cache automatically
-//
-// API endpoints discovered from h704-bot:
-//   getAttendanceValidationFromActivity         → list all activities (POS/BTL)
-//   getListStaffDetailActivityFromActivity      → staff clock-in/out per activity
+// Uses active account JWT (prospek-bot jwt.txt, follows /use switch)
 
 const { readFileSync, existsSync } = require('fs');
 const { execSync } = require('child_process');
 
 const STAR_API = 'https://api.star.astra.co.id/graphql/';
+
 
 // ── JWT source priority ───────────────────────────────────────────────────────
 // Priority: prospek-bot jwt.txt (active account, follows /use switch) FIRST,
@@ -43,13 +40,13 @@ function getJwtSync() {
   return null;
 }
 
+
 // ── GraphQL via curl ────────────────────────────────────────────────────────
 function gql(query, variables = {}) {
   const jwt = getJwtSync();
   if (!jwt) throw new Error('No valid JWT found');
 
   const body = JSON.stringify({ query, variables });
-  // Escape single quotes for shell
   const escaped = body.replace(/'/g, "'\\''");
   const cmd = `curl -s --max-time 15 '${STAR_API}' ` +
     `-H 'Authorization: Bearer ${jwt}' ` +
@@ -62,9 +59,9 @@ function gql(query, variables = {}) {
   return d.data;
 }
 
+
 // ── ISO 8601 Duration → structured time ─────────────────────────────────────
 // PT8H42M9.0931612S  →  { time: "08:42:09", label: "08:42 WITA" }
-// The duration IS WITA time (phone local clock-in time, stored as hours from midnight)
 function parseClockInDuration(isoDur) {
   if (!isoDur || isoDur === 'null' || isoDur === 'undefined') return null;
   if (typeof isoDur !== 'string') return null;
@@ -82,7 +79,6 @@ function parseClockInDuration(isoDur) {
     };
   }
 
-  // ISO datetime string fallback
   try {
     const d = new Date(isoDur);
     return {
@@ -95,6 +91,7 @@ function parseClockInDuration(isoDur) {
   }
 }
 
+
 // ── Get all activities ──────────────────────────────────────────────────────
 function getAllActivities() {
   const data = gql(`query {
@@ -104,6 +101,7 @@ function getAllActivities() {
   }`);
   return data.getAttendanceValidationFromActivity || [];
 }
+
 
 // ── Get staff for one activity (by activityIdForNotif) ──────────────────────
 function getStaffForActivity(activityIdForNotif) {
@@ -124,6 +122,7 @@ function getStaffForActivity(activityIdForNotif) {
   }));
 }
 
+
 // ── Build full report: activities + staff ───────────────────────────────────
 async function getFullActivityReport() {
   const activities = getAllActivities();
@@ -133,7 +132,8 @@ async function getFullActivityReport() {
   }));
 }
 
-// ── Format report for Telegram ───────────────────────────────────────────────
+
+// ── Format report for Telegram (all-in-one) ─────────────────────────────────
 function formatActivityReport(report) {
   const lines = [];
   const today = new Date().toLocaleDateString('id-ID', {
@@ -177,73 +177,189 @@ function formatActivityReport(report) {
   return lines.join('\n');
 }
 
-// ── POS only status ─────────────────────────────────────────────────────────
-function formatPOSReport(report) {
+
+// ── Unified activity report (BTL + POS combined, grouped by status) ───────────
+// This is the main report shown by /aktivitas — clean WA-friendly layout
+function formatActivityReportV2(report) {
+  const btl = report.filter(a => a.activityType === 'BTL');
   const pos = report.filter(a => a.activityType === 'POS');
-  const lines = [];
+
+  const allStaff = report.flatMap(a => a.staff);
+  const notClocked = allStaff.filter(s => !s.lastClockIn);
+  const clockedIn = allStaff.filter(s => s.lastClockIn && !s.lastClockOut);
+  const clockedOut = allStaff.filter(s => s.lastClockOut);
+
   const today = new Date().toLocaleDateString('id-ID', {
-    day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Makassar'
+    weekday: 'short', day: 'numeric', month: 'long', year: 'numeric',
+    timeZone: 'Asia/Makassar'
   });
 
+  const lines = [];
+
+  // Header
   lines.push('━━━━━━━━━━━━━━━━━━━━');
-  lines.push('  🏪 POS — Clock-in Status');
+  lines.push('  📋 CLOCK-IN REPORT');
   lines.push(`  📅 ${today} WITA`);
   lines.push('━━━━━━━━━━━━━━━━━━━━');
 
-  for (const act of pos) {
-    lines.push('');
-    for (const s of act.staff) {
-      const inTime = s.lastClockIn ? s.lastClockIn.label : '⏳ Belum Clock-in';
-      const outTime = s.lastClockOut ? s.lastClockOut.label : '–';
-      const badge = s.lastClockOut ? '🟢' : (s.lastClockIn ? '🟡' : '⚪');
-      lines.push(`${badge} ${s.name}`);
-      lines.push(`   🕐 ${inTime}${s.lastClockOut ? ' → ' + outTime : ''}`);
+  // ── BTL section ──
+  lines.push('');
+  lines.push('📣 BTL');
+  if (btl.length === 0) {
+    lines.push('  (tidak ada aktivitas BTL)');
+  } else {
+    const btlStaff = btl.flatMap(a => a.staff);
+    const btlNot = btlStaff.filter(s => !s.lastClockIn);
+    const btlIn = btlStaff.filter(s => s.lastClockIn && !s.lastClockOut);
+    const btlOut = btlStaff.filter(s => s.lastClockOut);
+
+    if (btlNot.length > 0) {
+      lines.push(`  ⬜ ${btlNot.length} belum clock-in`);
+      for (const s of btlNot) lines.push(`     ▸ ${s.name}`);
     }
+    if (btlIn.length > 0) {
+      lines.push(`  🟡 ${btlIn.length} sedang bekerja`);
+      for (const s of btlIn) lines.push(`     ▸ ${s.name}  ⏰ ${s.lastClockIn.label}`);
+    }
+    if (btlOut.length > 0) {
+      lines.push(`  🟢 ${btlOut.length} sudah clock-out`);
+      for (const s of btlOut) lines.push(`     ▸ ${s.name}  ⏰ ${s.lastClockIn.label} → ${s.lastClockOut.label}`);
+    }
+    lines.push(`  (${btlStaff.length} staff total)`);
   }
 
-  const allPOS = pos.flatMap(a => a.staff);
-  const clockedIn = allPOS.filter(s => s.lastClockIn && !s.lastClockOut).length;
+  // ── POS section ──
   lines.push('');
-  lines.push(`━━━━━━━━━━━━━━━━━━━━`);
-  lines.push(`  ✅ Clock-in: ${clockedIn}/${allPOS.length}`);
+  lines.push('🏪 POS');
+  if (pos.length === 0) {
+    lines.push('  (tidak ada aktivitas POS)');
+  } else {
+    const posStaff = pos.flatMap(a => a.staff);
+    const posNot = posStaff.filter(s => !s.lastClockIn);
+    const posIn = posStaff.filter(s => s.lastClockIn && !s.lastClockOut);
+    const posOut = posStaff.filter(s => s.lastClockOut);
+
+    if (posNot.length > 0) {
+      lines.push(`  ⬜ ${posNot.length} belum clock-in`);
+      for (const s of posNot) lines.push(`     ▸ ${s.name}`);
+    }
+    if (posIn.length > 0) {
+      lines.push(`  🟡 ${posIn.length} sedang bekerja`);
+      for (const s of posIn) lines.push(`     ▸ ${s.name}  ⏰ ${s.lastClockIn.label}`);
+    }
+    if (posOut.length > 0) {
+      lines.push(`  🟢 ${posOut.length} sudah clock-out`);
+      for (const s of posOut) lines.push(`     ▸ ${s.name}  ⏰ ${s.lastClockIn.label} → ${s.lastClockOut.label}`);
+    }
+    lines.push(`  (${posStaff.length} staff total)`);
+  }
+
+  // ── Summary ──
+  lines.push('');
+  lines.push('━━━━━━━━━━━━━━━━━━━━');
+  lines.push(`  📊 TOTAL: ${allStaff.length} staff`);
+  lines.push(`  🟡 ${clockedIn.length} bekerja`);
+  lines.push(`  🟢 ${clockedOut.length} selesai`);
+  lines.push(`  ⬜ ${notClocked.length} belum clock-in`);
   lines.push('━━━━━━━━━━━━━━━━━━━━');
 
   return lines.join('\n');
 }
+
+
+// ── POS only status ─────────────────────────────────────────────────────────
+function formatPOSReport(report) {
+  const pos = report.filter(a => a.activityType === 'POS');
+  const allPOS = pos.flatMap(a => a.staff);
+
+  const notClocked = allPOS.filter(s => !s.lastClockIn);
+  const working = allPOS.filter(s => s.lastClockIn && !s.lastClockOut);
+  const finished = allPOS.filter(s => s.lastClockOut);
+
+  const today = new Date().toLocaleDateString('id-ID', {
+    day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Makassar'
+  });
+
+  const lines = [];
+  lines.push('━━━━━━━━━━━━━━━━━━━━');
+  lines.push('  🏪 POS — Clock-in Status');
+  lines.push(`  📅 ${today} WITA`);
+  lines.push(`  📊 ${working.length + finished.length}/${allPOS.length} clock-in`);
+  lines.push('━━━━━━━━━━━━━━━━━━━━');
+
+  if (notClocked.length > 0) {
+    lines.push('');
+    lines.push(`⬜ ${notClocked.length} BELUM CLOCK-IN:`);
+    for (const s of notClocked) lines.push(`  ▸ ${s.name}`);
+  }
+
+  if (working.length > 0) {
+    lines.push('');
+    lines.push(`🟡 ${working.length} SEDANG KERJA:`);
+    for (const s of working) lines.push(`  ▸ ${s.name}  ⏰ ${s.lastClockIn.label}`);
+  }
+
+  if (finished.length > 0) {
+    lines.push('');
+    lines.push(`🟢 ${finished.length} Selesai:`);
+    for (const s of finished) lines.push(`  ▸ ${s.name}  ⏰ ${s.lastClockIn.label} → ${s.lastClockOut.label}`);
+  }
+
+  lines.push('');
+  lines.push('━━━━━━━━━━━━━━━━━━━━');
+  lines.push(`  🏪 POS: ${working.length + finished.length}/${allPOS.length} ✅`);
+  lines.push('━━━━━━━━━━━━━━━━━━━━');
+
+  return lines.join('\n');
+}
+
 
 // ── BTL only status ─────────────────────────────────────────────────────────
 function formatBTLReport(report) {
   const btl = report.filter(a => a.activityType === 'BTL');
-  const lines = [];
+  const allBTL = btl.flatMap(a => a.staff);
+
+  const notClocked = allBTL.filter(s => !s.lastClockIn);
+  const working = allBTL.filter(s => s.lastClockIn && !s.lastClockOut);
+  const finished = allBTL.filter(s => s.lastClockOut);
+
   const today = new Date().toLocaleDateString('id-ID', {
     day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Makassar'
   });
 
+  const lines = [];
   lines.push('━━━━━━━━━━━━━━━━━━━━');
   lines.push('  📣 BTL — Clock-in Status');
   lines.push(`  📅 ${today} WITA`);
+  lines.push(`  📊 ${working.length + finished.length}/${allBTL.length} clock-in`);
   lines.push('━━━━━━━━━━━━━━━━━━━━');
 
-  for (const act of btl) {
+  if (notClocked.length > 0) {
     lines.push('');
-    for (const s of act.staff) {
-      const inTime = s.lastClockIn ? s.lastClockIn.label : '⏳ Belum Clock-in';
-      const outTime = s.lastClockOut ? s.lastClockOut.label : '–';
-      const badge = s.lastClockOut ? '🟢' : (s.lastClockIn ? '🟡' : '⚪');
-      lines.push(`${badge} ${s.name}`);
-      lines.push(`   🕐 ${inTime}${s.lastClockOut ? ' → ' + outTime : ''}`);
-    }
+    lines.push(`⬜ ${notClocked.length} BELUM CLOCK-IN:`);
+    for (const s of notClocked) lines.push(`  ▸ ${s.name}`);
   }
 
-  const allBTL = btl.flatMap(a => a.staff);
-  const clockedIn = allBTL.filter(s => s.lastClockIn && !s.lastClockOut).length;
+  if (working.length > 0) {
+    lines.push('');
+    lines.push(`🟡 ${working.length} SEDANG KERJA:`);
+    for (const s of working) lines.push(`  ▸ ${s.name}  ⏰ ${s.lastClockIn.label}`);
+  }
+
+  if (finished.length > 0) {
+    lines.push('');
+    lines.push(`🟢 ${finished.length} Selesai:`);
+    for (const s of finished) lines.push(`  ▸ ${s.name}  ⏰ ${s.lastClockIn.label} → ${s.lastClockOut.label}`);
+  }
+
   lines.push('');
-  lines.push(`━━━━━━━━━━━━━━━━━━━━`);
-  lines.push(`  ✅ Clock-in: ${clockedIn}/${allBTL.length}`);
+  lines.push('━━━━━━━━━━━━━━━━━━━━');
+  lines.push(`  📣 BTL: ${working.length + finished.length}/${allBTL.length} ✅`);
   lines.push('━━━━━━━━━━━━━━━━━━━━');
 
   return lines.join('\n');
 }
+
 
 // ── Verify JWT ──────────────────────────────────────────────────────────────
 function verifyJwt() {
@@ -264,12 +380,14 @@ function verifyJwt() {
   }
 }
 
+
 // ── Exports ─────────────────────────────────────────────────────────────────
 module.exports = {
   getAllActivities,
   getStaffForActivity,
   getFullActivityReport,
   formatActivityReport,
+  formatActivityReportV2,
   formatPOSReport,
   formatBTLReport,
   verifyJwt,
