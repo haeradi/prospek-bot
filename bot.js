@@ -169,6 +169,29 @@ const QRY_SEARCH = `query GetProspek {
   }
 }`;
 
+// ====== LEADS ======
+const MUT_LEADS_FOLLOWUP = `mutation EnsureSaveFollowUpSalesman($input: EnsureSaveFollowUpSalesmanInputFromCrm!) {
+  ensureSaveFollowUpSalesmanFromCrm(input: $input)
+}`;
+const QRY_LEADS = `query GetLeads {
+  leadsByAssignmentFromCrm(input: { isOntrack: false, isOverdue: false }, first: 50) {
+    nodes { activityLeadsAssignmentId leadsId customerName telephoneNo }
+  }
+}`;
+const QRY_LEADS_ONTRACK = `query GetLeadsOntrack {
+  leadsByAssignmentFromCrm(input: { isOntrack: true, isOverdue: false }, first: 50) {
+    nodes { activityLeadsAssignmentId }
+  }
+}`;
+
+// Helper: get unique leads not yet on-track (deduplicated) — MODULE SCOPE so all handlers can use it
+function getFreshLeads(data, ontrackData) {
+  const ontrackIds = new Set(
+    (ontrackData?.leadsByAssignmentFromCrm?.nodes || []).map(n => n.activityLeadsAssignmentId)
+  );
+  return (data?.leadsByAssignmentFromCrm?.nodes || []).filter(n => !ontrackIds.has(n.activityLeadsAssignmentId));
+}
+
 // ====== ASAL PROSPEK MAPPING ======
 const ASAL_PROSPEK = {
   "1":  { id: "4ad4a103-4aa6-4d48-88e1-7bba6cb95d77", name: "Gathering / Showroom Event" },
@@ -275,7 +298,8 @@ const mainMenu = {
       [{ text: '📊 FF / Excel', callback_data: 'ff:menu' },
        { text: '🔑 Set JWT', callback_data: 'setjwt' }],
       [{ text: '🚫 Bulk Not Deal', callback_data: 'notdeal:menu' },
-       { text: '🔐 Akun', callback_data: 'accounts:menu' }],
+       { text: '📋 Leads', callback_data: 'leads:menu' }],
+      [{ text: '🔐 Akun', callback_data: 'accounts:menu' }],
     ]
   }
 };
@@ -288,7 +312,8 @@ const replyKeyboard = () => ({
       [{ text: '📝 Prospek LOW' }, { text: '📝 Prospek MEDIUM' }, { text: '📝 Prospek HOT' }],
       [{ text: '⬆️ Upgrade Status' }, { text: '📋 Cari Prospek' }],
       [{ text: '📊 FF / Excel' }, { text: '🔑 Set JWT' }],
-      [{ text: '🚫 Bulk Not Deal' }, { text: '🔐 Akun' }],
+      [{ text: '🚫 Bulk Not Deal' }, { text: '📋 Leads' }],
+      [{ text: '🔐 Akun' }],
     ],
     resize_keyboard: true,
     one_time_keyboard: false,
@@ -303,6 +328,12 @@ const backBtn = (cb) => ({ reply_markup: { inline_keyboard: [[{ text: '⬅️ Ke
 const confirmBtn = () => ({ reply_markup: { inline_keyboard: [[{ text: '✅ Kirim', callback_data: 'confirm' }, { text: '⬅️ Batal', callback_data: 'cancel' }]] } });
 
 // ====== NOT DEAL REASONS ======
+// Alasan follow-up untuk bulk not deal → tampil di timeline CRM prospek.
+// "Ada keperluan lain" = scenario H1, UUID b7b0c814-ef70-4068-b26f-abf73b03ec0b
+// (verified via mobile APK recon getAllFollowUpReasonFromCrm). Field `reason`/
+// `description` di mutation ensureCreateFollowUpProspectFromCustomers = String
+// (bukan UUID) — kirim display string persis.
+const NOTDEAL_REASON = 'Ada keperluan lain';
 const REASONS_NOT_DEAL = [
   'TIDAK_BERMINAT', 'HARGA_MAHAL', 'SUDAH_PUNYA', 'DOWN_PAYMENT_MAHAL',
   'JARAK_TEMPAT', 'RESPON_LAMBAT', 'TIDAK_RESPON', 'BANTUAN_PIMPINAN',
@@ -600,7 +631,7 @@ bot.onText(/^\/jwt\s+(.+)/, async (msg, match) => {
 // ── Account group helpers ───────────────────────────────────────────────────────────
 const TEAM_GROUPS = {
   'OWNER / UTAMA': ['H704'],
-  'BABULU':        ['SEPTHI', 'NURLELA'],
+  'BABULU':        ['SEPTHI', 'SASKIA', 'NURLELA'],
   'SOTEK':         ['NORMAYANTI', 'RESKI'],
   'GIRIMUKTI':     ['DESI', 'TIARA'],
   'SEPAKU':        ['RANGA'],
@@ -634,7 +665,11 @@ function formatAccountsList(accounts) {
   ];
 
   for (const [grp, codes] of Object.entries(TEAM_GROUPS)) {
-    const members = accounts.filter(a => codes.includes(a.code));
+    const grpUpper = grp.replace(/^.*\/\s*/, '').trim();
+    const members = accounts.filter(a =>
+      codes.includes(a.code) ||
+      (a.dealerName || '').toUpperCase().includes(grpUpper)
+    );
     if (!members.length) continue;
     lines.push(`  ${'─'.repeat(26)}`);
     lines.push(`  📂 ${grp}`);
@@ -642,6 +677,25 @@ function formatAccountsList(accounts) {
       const st = VAULT.getJwtStatus(a.code);
       const { emoji, label } = _s(st);
       lines.push(`    ${emoji}  ${a.code.padEnd(12)} ${label}`);
+    }
+    lines.push('');
+  }
+  // Accounts not in any team group
+  const orphaned = accounts.filter(a => {
+    for (const [grp, codes] of Object.entries(TEAM_GROUPS)) {
+      const grpUpper = grp.replace(/^.*\/\s*/, '').trim();
+      if (codes.includes(a.code) || (a.dealerName || '').toUpperCase().includes(grpUpper))
+        return false;
+    }
+    return true;
+  });
+  if (orphaned.length) {
+    lines.push(`  ${'─'.repeat(26)}`);
+    lines.push(`  📂 LAINNYA`);
+    for (const a of orphaned) {
+      const st = VAULT.getJwtStatus(a.code);
+      const { emoji, label } = _s(st);
+      lines.push(`    ${emoji}  ${(a.dealerName || a.code).padEnd(12)} ${label}`);
     }
     lines.push('');
   }
@@ -655,13 +709,34 @@ function formatAccountsList(accounts) {
 function buildAccountsMenuKeyboard(accounts) {
   const rows = [];
   for (const [grp, codes] of Object.entries(TEAM_GROUPS)) {
-    const members = accounts.filter(a => codes.includes(a.code));
+    const grpUpper = grp.replace(/^.*\/\s*/, '').trim();
+    const members = accounts.filter(a =>
+      codes.includes(a.code) ||
+      (a.dealerName || '').toUpperCase().includes(grpUpper)
+    );
     if (!members.length) continue;
     rows.push([{ text: `▸ ${grp}`, callback_data: 'noop' }]);
     for (const a of members) {
       const st = VAULT.getJwtStatus(a.code);
       const { emoji, label } = _s(st);
       rows.push([{ text: `${emoji}  ${a.code}  ·  ${label}`, callback_data: `accounts:detail:${a.code}` }]);
+    }
+  }
+  // Accounts not in any team group
+  const orphaned = accounts.filter(a => {
+    for (const [grp, codes] of Object.entries(TEAM_GROUPS)) {
+      const grpUpper = grp.replace(/^.*\/\s*/, '').trim();
+      if (codes.includes(a.code) || (a.dealerName || '').toUpperCase().includes(grpUpper))
+        return false;
+    }
+    return true;
+  });
+  if (orphaned.length) {
+    rows.push([{ text: `▸ LAINNYA`, callback_data: 'noop' }]);
+    for (const a of orphaned) {
+      const st = VAULT.getJwtStatus(a.code);
+      const { emoji, label } = _s(st);
+      rows.push([{ text: `${emoji}  ${a.dealerName || a.code}  ·  ${label}`, callback_data: `accounts:detail:${a.code}` }]);
     }
   }
   rows.push([{ text: '───────────────────', callback_data: 'noop' }]);
@@ -1404,7 +1479,7 @@ bot.on('callback_query', async (q) => {
     convSet(chatId, { step: 'notdeal_status' });
     return editMsg(chatId, msgId,
       '🚫 *Bulk Not Deal*\n' +
-      'Reason : *TIDAK_BERMINAT*\n' +
+      `Alasan : *${NOTDEAL_REASON}*\n` +
       '(auto-set, tidak bisa diubah)\n\n' +
       'Pilih *STATUS* prospek yang ingin di-NOT DEAL-kan:',
       notdealStatusKeyboard());
@@ -1415,10 +1490,10 @@ bot.on('callback_query', async (q) => {
     const targetStatus = data.split(':')[2]; // HOT, MEDIUM, LOW, or ALL
     const s = convGet(chatId) || {};
     s.notdeal_status = targetStatus;
-    s.notdeal_reason = 'TIDAK_BERMINAT'; // hardcoded
+    s.notdeal_reason = NOTDEAL_REASON;
     convSet(chatId, s);
 
-    const reason = 'TIDAK_BERMINAT';
+    const reason = NOTDEAL_REASON;
     const statusLabel = targetStatus === 'ALL' ? 'HOT + MEDIUM + LOW' : targetStatus;
 
     // Collect ALL prospect names per status (paginated, S0001-safe)
@@ -1509,7 +1584,8 @@ bot.on('callback_query', async (q) => {
     const s = convGet(chatId) || {};
     if (!s.notdeal_reason) return bot.sendMessage(chatId, '❌ Session expired.', replyKeyboard());
 
-    const reason = 'TIDAK_BERMINAT';
+    // Alasan Lost & follow-up = "Ada keperluan lain" (NOTDEAL_REASON).
+    // reasonNotDeal menerima plain string bebas — tidak lagi hardcode TIDAK_BERMINAT.
     const targetStatus = s.notdeal_status;
     const statuses = targetStatus === 'ALL' ? ['HOT', 'MEDIUM', 'LOW'] : [targetStatus];
     const statusLabel = targetStatus === 'ALL' ? 'HOT + MEDIUM + LOW' : targetStatus;
@@ -1546,7 +1622,14 @@ bot.on('callback_query', async (q) => {
               totalSkipped++; continue;
             }
             try {
-              callStar(MUT_ND, { data: { customerProspectId: p.id, prospectStatus: 'LOST', reasonNotDeal: reason } });
+              // Set prospect status → LOST dengan alasan "Ada keperluan lain".
+              // reasonNotDeal = plain string bebas (bukan enum), kirim display string
+              // langsung supaya alasan Lost di CRM = "Ada keperluan lain".
+              // ⚠️ CUKUP status update saja — mutation ini SUDAH otomatis bikin entri
+              //    "Prospek Lost" di timeline. JANGAN tambah ensureCreateFollowUpProspect
+              //    karena itu bikin entri "Follow up Prospek Selanjutnya" yang meng-
+              //    aktifkan ulang prospek → tidak jadi Lost (bug dobel follow-up).
+              callStar(MUT_ND, { data: { customerProspectId: p.id, prospectStatus: 'LOST', reasonNotDeal: NOTDEAL_REASON } });
               totalOk++;
               if (st === 'HOT') okHot.push(p.name);
               else if (st === 'MEDIUM') okMed.push(p.name);
@@ -1571,7 +1654,7 @@ bot.on('callback_query', async (q) => {
     conv.delete(chatId);
 
     let resultTxt = `✅ *Bulk Not Deal — SELESAI*\\n\\n`;
-    resultTxt += `Reason : *${reason}*\\n`;
+    resultTxt += `Alasan : *${NOTDEAL_REASON}*\\n`;
     resultTxt += `─────────────────────\\n`;
     resultTxt += `✅ OK      : *${totalOk}*\\n`;
     if (totalSkipped > 0) resultTxt += `⏭️ Skip    : *${totalSkipped}*\\n`;
@@ -1597,6 +1680,135 @@ bot.on('callback_query', async (q) => {
     }
     resultTxt += `\\n─────────────────────\\n`;
     resultTxt += `_Diupdate oleh @Rd_prospek_bot_`;
+    return bot.sendMessage(chatId, resultTxt, { parse_mode: 'Markdown', ...replyKeyboard() });
+  }
+
+  // ====== LEADS HANDLERS ======
+  // (getFreshLeads defined at module scope)
+
+  // --- LEADS MENU ---
+  if (data === 'leads:menu') {
+    convSet(chatId, { step: 'leads_menu' });
+    (async () => {
+      try {
+        const d = callStar(QRY_LEADS);
+        const ot = callStar(QRY_LEADS_ONTRACK);
+        const nodes = getFreshLeads(d, ot);
+        if (!nodes || nodes.length === 0) {
+          return editMsg(chatId, msgId, '📋 *Leads*\n\nTidak ada leads aktif.', backBtn('menu'));
+        }
+        let txt = `📋 *Leads* (*${nodes.length}*)\n\n`;
+        for (let i = 0; i < nodes.length; i++) {
+          const n = nodes[i];
+          txt += `${i + 1}. ${n.customerName}\n   📞 ${n.telephoneNo || '-'}\n`;
+        }
+        txt += `\n─────────────────────`;
+        return editMsg(chatId, msgId, txt, {
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: '🚀 Bulk Follow-Up Leads', callback_data: 'leads:bulk' }],
+              [{ text: '🏠 Menu', callback_data: 'menu' }],
+            ]
+          }
+        });
+      } catch (e) {
+        return editMsg(chatId, msgId, `❌ Error: ${e.message}`, backBtn('menu'));
+      }
+    })();
+    return;
+  }
+
+  // --- LEADS BULK FOLLOW-UP PREVIEW ---
+  if (data === 'leads:bulk') {
+    (async () => {
+      try {
+        const d = callStar(QRY_LEADS);
+        const ot = callStar(QRY_LEADS_ONTRACK);
+        const nodes = getFreshLeads(d, ot);
+        if (!nodes || nodes.length === 0) {
+          return editMsg(chatId, msgId, '❌ Tidak ada leads aktif untuk di-follow-up.', backBtn('leads:menu'));
+        }
+        const names = nodes.map(n => n.customerName);
+        let txt = `🚀 *Bulk Follow-Up Leads*\n\n`;
+        txt += `📞 Method  : *WhatsApp Chat*\n`;
+        txt += `📋 Status  : *Chat terkirim, dibalas*\n`;
+        txt += `❌ Result  : *Tidak Tertarik*\n`;
+        txt += `📝 Alasan  : *Ada keperluan lain*\n`;
+        txt += `💬 Ket     : *belum*\n`;
+        txt += `\n─────────────────────\n`;
+        txt += `🔸 *${nodes.length} leads* akan di-follow-up:\n`;
+        for (const n of names.slice(0, 20)) txt += `  ▸ ${n}\n`;
+        if (names.length > 20) txt += `  ... dan ${names.length - 20} lainnya\n`;
+        txt += `\n─────────────────────\n`;
+        txt += `⚠️ TIDAK bisa di-undo.\n\n`;
+        txt += `Ketik *YA* untuk konfirmasi, atau *BATAL*.`;
+
+        convSet(chatId, { step: 'leads_bulk_confirm', leadsData: nodes });
+        return editMsg(chatId, msgId, txt, {
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: '✅ YA, PROSES', callback_data: 'leads:do' }],
+              [{ text: '⬅️ Batal', callback_data: 'leads:menu' }],
+            ]
+          }
+        });
+      } catch (e) {
+        return editMsg(chatId, msgId, `❌ Error: ${e.message}`, backBtn('leads:menu'));
+      }
+    })();
+    return;
+  }
+
+  // --- LEADS BULK FOLLOW-UP EXECUTE ---
+  if (data === 'leads:do') {
+    const s = convGet(chatId) || {};
+    const leadsData = s.leadsData;
+    if (!leadsData || !Array.isArray(leadsData) || leadsData.length === 0) {
+      return bot.sendMessage(chatId, '❌ Session expired. Mulai ulang dari menu Leads.', replyKeyboard());
+    }
+
+    auditLog('leads_bulk_followup', { chatId, count: leadsData.length });
+
+    let totalOk = 0, totalFail = 0;
+    const failedList = [];
+
+    for (const lead of leadsData) {
+      try {
+        callStar(MUT_LEADS_FOLLOWUP, {
+          input: {
+            activityLeadsAssignmentId: lead.activityLeadsAssignmentId,
+            followUpMethod: 'WhatsApp Chat',
+            followUpStatus: 'Chat terkirim, dibalas',
+            followUpResult: 'Tidak Tertarik',
+            followUpResultReason: 'Ada keperluan lain',
+            followUpNotes: 'belum',
+          }
+        });
+        totalOk++;
+      } catch (e) {
+        totalFail++;
+        if (failedList.length < 5) failedList.push(`${lead.customerName}: ${e.message}`);
+      }
+      await new Promise(r => setTimeout(r, 2000));
+    }
+
+    conv.delete(chatId);
+
+    let resultTxt = `✅ *Bulk Follow-Up Leads — SELESAI*\n\n`;
+    resultTxt += `📞 Method : *WhatsApp Chat*\n`;
+    resultTxt += `📋 Status : *Chat terkirim, dibalas*\n`;
+    resultTxt += `❌ Result : *Tidak Tertarik*\n`;
+    resultTxt += `📝 Alasan : *Ada keperluan lain*\n`;
+    resultTxt += `💬 Ket    : *belum*\n`;
+    resultTxt += `─────────────────────\n`;
+    resultTxt += `✅ OK      : *${totalOk}*\n`;
+    if (totalFail > 0) resultTxt += `❌ Gagal   : *${totalFail}*\n`;
+    resultTxt += `─────────────────────`;
+    if (failedList.length > 0) {
+      resultTxt += `\n⚠️ Gagal:\n`;
+      for (const f of failedList) resultTxt += `  ▸ ${f}\n`;
+    }
+    resultTxt += `\n_Diupdate oleh @Rd_prospek_bot_`;
     return bot.sendMessage(chatId, resultTxt, { parse_mode: 'Markdown', ...replyKeyboard() });
   }
 });
@@ -2194,11 +2406,11 @@ bot.on('message', (msg) => {
   if (!msg.text) return;
   const text = msg.text.trim();
   const chatId = msg.chat.id;
-  // Always clear stale conversation state when user taps a menu button
-  conv.delete(chatId);
 
   // Route Reply Keyboard button taps → send same menu as callback would
+  // Only clear stale conversation state when user taps a known menu button
   if (text === '📝 Prospek LOW') {
+    conv.delete(chatId);
     convSet(chatId, { step: 'ask_name', level: 'LOW', data: {} });
     return bot.sendMessage(chatId,
       '📝 *Prospek LOW*\nField: Nama + HP + Asal\n\nSilakan masukkan **nama lengkap customer**:',
@@ -2206,6 +2418,7 @@ bot.on('message', (msg) => {
     );
   }
   if (text === '📝 Prospek MEDIUM') {
+    conv.delete(chatId);
     convSet(chatId, { step: 'ask_name', level: 'MEDIUM', data: {} });
     return bot.sendMessage(chatId,
       '📝 *Prospek MEDIUM*\nField: Nama + HP + Asal + Motor + Alamat\n\nSilakan masukkan **nama lengkap customer**:',
@@ -2213,6 +2426,7 @@ bot.on('message', (msg) => {
     );
   }
   if (text === '📝 Prospek HOT') {
+    conv.delete(chatId);
     convSet(chatId, { step: 'ask_name', level: 'HOT', data: {} });
     return bot.sendMessage(chatId,
       '📝 *Prospek HOT*\nField: Nama + HP + Asal + Motor + NIK + Alamat\n\nSilakan masukkan **nama lengkap customer**:',
@@ -2220,6 +2434,7 @@ bot.on('message', (msg) => {
     );
   }
   if (text === '⬆️ Upgrade Status') {
+    conv.delete(chatId);
     convSet(chatId, { step: 'upgrade_search' });
     return bot.sendMessage(chatId,
       '⬆️ *Upgrade Status Prospek*\n\nMasukkan nomor HP atau nama customer yang ingin di-upgrade:',
@@ -2227,6 +2442,7 @@ bot.on('message', (msg) => {
     );
   }
   if (text === '📋 Cari Prospek') {
+    conv.delete(chatId);
     convSet(chatId, { step: 'search' });
     return bot.sendMessage(chatId,
       '📋 *Cari Prospek*\n\nMasukkan nama atau nomor HP customer:',
@@ -2234,6 +2450,7 @@ bot.on('message', (msg) => {
     );
   }
   if (text === '📊 FF / Excel') {
+    conv.delete(chatId);
     convSet(chatId, { step: 'ff_input' });
     return bot.sendMessage(chatId,
       '📊 *FF / Excel Input*\n\nKirim data dalam format:\n\n```\nindividu NO NAMA LAKI-LAKI ALAMAT RT.00X KALIMANTAN TIMUR KABUPATEN PENAJAM ... KODEMOTOR\n```\n\nContoh:\n```\nindividu 3 AHMAD SAPAR LAKI-LAKI BULU MINUNG RT.001 KALIMANTAN TIMUR KABUPATEN PENAJAM PASER UTARA PENAJAM BULUMINUNG 001 000 LAKI-LAKI ISLAM LAIN-LAIN 081347313249 tidak kredit NE0B\n```\n\n💡 Kirim beberapa baris sekaligus untuk batch input!',
@@ -2241,6 +2458,7 @@ bot.on('message', (msg) => {
     );
   }
   if (text === '🔑 Set JWT') {
+    conv.delete(chatId);
     convSet(chatId, { step: 'wait_jwt' });
     return bot.sendMessage(chatId,
       '🔑 *Set JWT Token*\n\nKirim token JWT:\n`/jwt <token>`',
@@ -2248,11 +2466,45 @@ bot.on('message', (msg) => {
     );
   }
   if (text === '🚫 Bulk Not Deal') {
+    conv.delete(chatId);
     convSet(chatId, { step: 'notdeal_status' });
     return bot.sendMessage(chatId,
-      '🚫 *Bulk Not Deal*\nReason : *TIDAK_BERMINAT*\n(auto-set, tidak bisa diubah)\n\nPilih *STATUS* prospek yang ingin di-NOT DEAL-kan:',
+      `🚫 *Bulk Not Deal*\nAlasan : *${NOTDEAL_REASON}*\n(auto-set, tidak bisa diubah)\n\nPilih *STATUS* prospek yang ingin di-NOT DEAL-kan:`,
       { parse_mode: 'Markdown', ...notdealStatusKeyboard() }
     );
+  }
+  if (text === '📋 Leads') {
+    conv.delete(chatId);
+    convSet(chatId, { step: 'leads_menu' });
+    (async () => {
+      try {
+        const d = callStar(QRY_LEADS);
+        const ot = callStar(QRY_LEADS_ONTRACK);
+        const nodes = getFreshLeads(d, ot);
+        if (!nodes || nodes.length === 0) {
+          return bot.sendMessage(chatId, '📋 *Leads*\n\nTidak ada leads aktif.', { parse_mode: 'Markdown', ...backBtn('menu') });
+        }
+        let txt = `📋 *Leads* (*${nodes.length}*)\n\n`;
+        for (let i = 0; i < nodes.length; i++) {
+          const n = nodes[i];
+          txt += `${i + 1}. ${n.customerName}\n   📞 ${n.telephoneNo || '-'}\n`;
+        }
+        txt += `\n─────────────────────`;
+        convSet(chatId, { step: 'leads_menu', leadsData: nodes });
+        return bot.sendMessage(chatId, txt, {
+          parse_mode: 'Markdown',
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: '🚀 Bulk Follow-Up Leads', callback_data: 'leads:bulk' }],
+              [{ text: '🏠 Menu', callback_data: 'menu' }],
+            ]
+          }
+        });
+      } catch (e) {
+        return bot.sendMessage(chatId, `❌ Error: ${e.message}`, { parse_mode: 'Markdown', ...backBtn('menu') });
+      }
+    })();
+    return;
   }
   if (text === '🔐 Akun') {
     const accounts = VAULT.listAccounts();
