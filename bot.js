@@ -185,11 +185,19 @@ const QRY_LEADS_ONTRACK = `query GetLeadsOntrack {
 }`;
 
 // Helper: get unique leads not yet on-track (deduplicated) — MODULE SCOPE so all handlers can use it
+// getFreshLeads: only leads NOT yet in ontrack (cross-list dedup)
 function getFreshLeads(data, ontrackData) {
   const ontrackIds = new Set(
     (ontrackData?.leadsByAssignmentFromCrm?.nodes || []).map(n => n.activityLeadsAssignmentId)
   );
-  return (data?.leadsByAssignmentFromCrm?.nodes || []).filter(n => !ontrackIds.has(n.activityLeadsAssignmentId));
+  const nodes = data?.leadsByAssignmentFromCrm?.nodes || [];
+  const seen = new Set();
+  return nodes.filter(n => {
+    const k = n.activityLeadsAssignmentId;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return !ontrackIds.has(k);
+  });
 }
 
 // ====== ASAL PROSPEK MAPPING ======
@@ -1778,7 +1786,8 @@ bot.on('callback_query', async (q) => {
           input: {
             activityLeadsAssignmentId: lead.activityLeadsAssignmentId,
             followUpMethod: 'WhatsApp Chat',
-            followUpStatus: 'Chat terkirim, dibalas',
+            followUpStatus: 'Contacted',
+            followUpStatusDesc: 'Chat terkirim, dibalas',
             followUpResult: 'Tidak Tertarik',
             followUpResultReason: 'Ada keperluan lain',
             followUpNotes: 'belum',
