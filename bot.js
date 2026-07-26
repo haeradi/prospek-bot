@@ -198,16 +198,12 @@ function getFreshLeads(data) {
   });
 }
 
-// fetchAllLeads: query BOTH ontrack:false AND ontrack:true leads, merge, dedup
-// ON TRACK leads can still be changed to "not interested"
+// fetchAllLeads: query hanya ON TRACK (isOntrack:true) leads, dedup
 function fetchAllLeads() {
-  const d1 = callStar(QRY_LEADS);
-  const d2 = callStar(QRY_LEADS_ONTRACK);
-  const nodes1 = d1?.leadsByAssignmentFromCrm?.nodes || [];
-  const nodes2 = d2?.leadsByAssignmentFromCrm?.nodes || [];
-  const all = [...nodes1, ...nodes2];
+  const d = callStar(QRY_LEADS_ONTRACK);
+  const nodes = d?.leadsByAssignmentFromCrm?.nodes || [];
   const seen = new Set();
-  return all.filter(n => {
+  return nodes.filter(n => {
     const k = n.activityLeadsAssignmentId;
     if (seen.has(k)) return false;
     seen.add(k);
