@@ -179,8 +179,8 @@ const QRY_LEADS = `query GetLeads {
   }
 }`;
 const QRY_LEADS_ONTRACK = `query GetLeadsOntrack {
-  leadsByAssignmentFromCrm(input: { isOntrack: true, isOverdue: true }, first: 50) {
-    nodes { activityLeadsAssignmentId leadsId customerName telephoneNo followUpStatus }
+  leadsByAssignmentFromCrm(input: { isOntrack: true, isOverdue: false }, first: 50) {
+    nodes { activityLeadsAssignmentId leadsId customerName telephoneNo isOverdue }
   }
 }`;
 
@@ -198,14 +198,12 @@ function getFreshLeads(data) {
   });
 }
 
-// fetchAllLeads: query hanya ON TRACK (isOntrack:true) leads, dedup, exclude yg sdh diproses
+// fetchAllLeads: query hanya ON TRACK (isOntrack:true) leads, dedup
 function fetchAllLeads() {
   const d = callStar(QRY_LEADS_ONTRACK);
   const nodes = d?.leadsByAssignmentFromCrm?.nodes || [];
   const seen = new Set();
   return nodes.filter(n => {
-    // Skip already-processed leads (have followUpStatus)
-    if (n.followUpStatus) return false;
     const k = n.activityLeadsAssignmentId;
     if (seen.has(k)) return false;
     seen.add(k);
