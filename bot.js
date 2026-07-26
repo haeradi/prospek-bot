@@ -185,18 +185,16 @@ const QRY_LEADS_ONTRACK = `query GetLeadsOntrack {
 }`;
 
 // Helper: get unique leads not yet on-track (deduplicated) — MODULE SCOPE so all handlers can use it
-// getFreshLeads: only leads NOT yet in ontrack (cross-list dedup)
-function getFreshLeads(data, ontrackData) {
-  const ontrackIds = new Set(
-    (ontrackData?.leadsByAssignmentFromCrm?.nodes || []).map(n => n.activityLeadsAssignmentId)
-  );
+// getFreshLeads: get all active leads (not overdue), dedup by ID only
+// Ontrack filter removed per user request — all isOntrack:false leads are processable
+function getFreshLeads(data) {
   const nodes = data?.leadsByAssignmentFromCrm?.nodes || [];
   const seen = new Set();
   return nodes.filter(n => {
     const k = n.activityLeadsAssignmentId;
     if (seen.has(k)) return false;
     seen.add(k);
-    return !ontrackIds.has(k);
+    return true;
   });
 }
 
@@ -1700,8 +1698,7 @@ bot.on('callback_query', async (q) => {
     (async () => {
       try {
         const d = callStar(QRY_LEADS);
-        const ot = callStar(QRY_LEADS_ONTRACK);
-        const nodes = getFreshLeads(d, ot);
+        const nodes = getFreshLeads(d);
         if (!nodes || nodes.length === 0) {
           return editMsg(chatId, msgId, '📋 *Leads*\n\nTidak ada leads aktif.', backBtn('menu'));
         }
@@ -1731,8 +1728,7 @@ bot.on('callback_query', async (q) => {
     (async () => {
       try {
         const d = callStar(QRY_LEADS);
-        const ot = callStar(QRY_LEADS_ONTRACK);
-        const nodes = getFreshLeads(d, ot);
+        const nodes = getFreshLeads(d);
         if (!nodes || nodes.length === 0) {
           return editMsg(chatId, msgId, '❌ Tidak ada leads aktif untuk di-follow-up.', backBtn('leads:menu'));
         }
@@ -2488,8 +2484,7 @@ bot.on('message', (msg) => {
     (async () => {
       try {
         const d = callStar(QRY_LEADS);
-        const ot = callStar(QRY_LEADS_ONTRACK);
-        const nodes = getFreshLeads(d, ot);
+        const nodes = getFreshLeads(d);
         if (!nodes || nodes.length === 0) {
           return bot.sendMessage(chatId, '📋 *Leads*\n\nTidak ada leads aktif.', { parse_mode: 'Markdown', ...backBtn('menu') });
         }
