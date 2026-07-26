@@ -1,0 +1,12 @@
+const fs = require("fs");
+const execSync = require("child_process").execSync;
+const jwt = fs.readFileSync("jwt.txt","utf8").trim();
+const q = `query GetLeads { leadsByAssignmentFromCrm(input: { isOntrack: false, isOverdue: false }, first: 50) { nodes { activityLeadsAssignmentId customerName telephoneNo } } }`;
+const body = JSON.stringify({query: q});
+const cmd = "curl -s --max-time 15 'https://api.star.astra.co.id/graphql/' -H 'Authorization: Bearer " + jwt + "' -H 'Content-Type: application/json' -d '" + body.replace(/'/g, "'\\''") + "'";
+const r = JSON.parse(execSync(cmd, {encoding:"utf8"}));
+const nodes = r?.data?.leadsByAssignmentFromCrm?.nodes || [];
+const seen = new Set();
+const deduped = nodes.filter(n => { const k=n.activityLeadsAssignmentId; if(seen.has(k))return false; seen.add(k); return true; });
+console.log("Leads Saskia (tanpa filter ontrack): " + deduped.length);
+deduped.forEach((n,i) => console.log("  "+(i+1)+". "+n.customerName+" | "+n.telephoneNo));

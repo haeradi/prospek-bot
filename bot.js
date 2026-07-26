@@ -175,12 +175,12 @@ const MUT_LEADS_FOLLOWUP = `mutation EnsureSaveFollowUpSalesman($input: EnsureSa
 }`;
 const QRY_LEADS = `query GetLeads {
   leadsByAssignmentFromCrm(input: { isOntrack: false, isOverdue: false }, first: 50) {
-    nodes { activityLeadsAssignmentId leadsId customerName telephoneNo }
+    nodes { activityLeadsAssignmentId leadsId customerName telephoneNo isOverdue }
   }
 }`;
 const QRY_LEADS_ONTRACK = `query GetLeadsOntrack {
   leadsByAssignmentFromCrm(input: { isOntrack: true, isOverdue: false }, first: 50) {
-    nodes { activityLeadsAssignmentId }
+    nodes { activityLeadsAssignmentId leadsId customerName telephoneNo isOverdue }
   }
 }`;
 
@@ -191,6 +191,23 @@ function getFreshLeads(data) {
   const nodes = data?.leadsByAssignmentFromCrm?.nodes || [];
   const seen = new Set();
   return nodes.filter(n => {
+    const k = n.activityLeadsAssignmentId;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+}
+
+// fetchAllLeads: query BOTH ontrack:false AND ontrack:true leads, merge, dedup
+// ON TRACK leads can still be changed to "not interested"
+function fetchAllLeads() {
+  const d1 = callStar(QRY_LEADS);
+  const d2 = callStar(QRY_LEADS_ONTRACK);
+  const nodes1 = d1?.leadsByAssignmentFromCrm?.nodes || [];
+  const nodes2 = d2?.leadsByAssignmentFromCrm?.nodes || [];
+  const all = [...nodes1, ...nodes2];
+  const seen = new Set();
+  return all.filter(n => {
     const k = n.activityLeadsAssignmentId;
     if (seen.has(k)) return false;
     seen.add(k);
@@ -1697,8 +1714,7 @@ bot.on('callback_query', async (q) => {
     convSet(chatId, { step: 'leads_menu' });
     (async () => {
       try {
-        const d = callStar(QRY_LEADS);
-        const nodes = getFreshLeads(d);
+        const nodes = fetchAllLeads();
         if (!nodes || nodes.length === 0) {
           return editMsg(chatId, msgId, '📋 *Leads*\n\nTidak ada leads aktif.', backBtn('menu'));
         }
@@ -1727,8 +1743,7 @@ bot.on('callback_query', async (q) => {
   if (data === 'leads:bulk') {
     (async () => {
       try {
-        const d = callStar(QRY_LEADS);
-        const nodes = getFreshLeads(d);
+        const nodes = fetchAllLeads();
         if (!nodes || nodes.length === 0) {
           return editMsg(chatId, msgId, '❌ Tidak ada leads aktif untuk di-follow-up.', backBtn('leads:menu'));
         }
@@ -2483,8 +2498,7 @@ bot.on('message', (msg) => {
     convSet(chatId, { step: 'leads_menu' });
     (async () => {
       try {
-        const d = callStar(QRY_LEADS);
-        const nodes = getFreshLeads(d);
+        const nodes = fetchAllLeads();
         if (!nodes || nodes.length === 0) {
           return bot.sendMessage(chatId, '📋 *Leads*\n\nTidak ada leads aktif.', { parse_mode: 'Markdown', ...backBtn('menu') });
         }
