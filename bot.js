@@ -179,12 +179,12 @@ const QRY_LEADS = `query GetLeads {
   }
 }`;
 const QRY_LEADS_ONTRACK = `query GetLeadsOntrack {
-  leadsByAssignmentFromCrm(input: { isOntrack: true, isOverdue: false }, first: 50) {
-    nodes { activityLeadsAssignmentId leadsId customerName telephoneNo isOverdue }
+  leadsByAssignmentFromCrm(input: { isOntrack: true, isOverdue: true }, first: 50) {
+    nodes { activityLeadsAssignmentId leadsId customerName telephoneNo followUpStatus }
   }
 }`;
 
-// Helper: get unique leads not yet on-track (deduplicated) — MODULE SCOPE so all handlers can use it
+// Helper: get unique leads not yet on-track (deduplicated)
 // getFreshLeads: get all active leads (not overdue), dedup by ID only
 // Ontrack filter removed per user request — all isOntrack:false leads are processable
 function getFreshLeads(data) {
@@ -198,12 +198,14 @@ function getFreshLeads(data) {
   });
 }
 
-// fetchAllLeads: query hanya ON TRACK (isOntrack:true) leads, dedup
+// fetchAllLeads: query hanya ON TRACK (isOntrack:true) leads, dedup, exclude yg sdh diproses
 function fetchAllLeads() {
   const d = callStar(QRY_LEADS_ONTRACK);
   const nodes = d?.leadsByAssignmentFromCrm?.nodes || [];
   const seen = new Set();
   return nodes.filter(n => {
+    // Skip already-processed leads (have followUpStatus)
+    if (n.followUpStatus) return false;
     const k = n.activityLeadsAssignmentId;
     if (seen.has(k)) return false;
     seen.add(k);
