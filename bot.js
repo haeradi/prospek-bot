@@ -230,17 +230,15 @@ function fetchAllLeads() {
   });
 }
 
-// fetchNewLeads: query NEW (isOntrack:false) leads, dedup, skip overdue
-// NOTE: isOverdue filter di query API Star broken (return semua), jadi
-// kita filter client-side: skip leads yg punya isOverdue===true
-// agar New leads yang tampil benar2 fresh
+// fetchNewLeads: query NEW (isOntrack:false) leads, dedup
+// NOTE: Tidak filter isOverdue karena API Star selalu return
+// isOverdue=true untuk lead lama yg belum pernah di-follow-up,
+// padahal itu masih New leads valid yang perlu diproses.
 function fetchNewLeads() {
   const d = callStar(QRY_LEADS_NEW);
   const nodes = d?.leadsByAssignmentFromCrm?.nodes || [];
   const seen = new Set();
   return nodes.filter(n => {
-    // skip overdue (handle both boolean dan string dari API)
-    if (n.isOverdue == true || n.isOverdue === 'true') return false;
     const k = n.activityLeadsAssignmentId;
     if (seen.has(k)) return false;
     seen.add(k);
@@ -1983,11 +1981,6 @@ bot.on('callback_query', async (q) => {
     const failedList = [];
 
     for (const lead of leadsData) {
-      // ❌ Skip overdue — jangan diproses
-      if (lead.isOverdue == true || lead.isOverdue === 'true') {
-        totalSkipped = (totalSkipped || 0) + 1;
-        continue;
-      }
       try {
         callStar(MUT_LEADS_FOLLOWUP, {
           input: {
@@ -2019,7 +2012,6 @@ bot.on('callback_query', async (q) => {
     resultTxt += `💬 Ket    : *belum*\n`;
     resultTxt += `─────────────────────\n`;
     resultTxt += `✅ OK      : *${totalOk}*\n`;
-    if (totalSkipped > 0) resultTxt += `⏭️ Skip    : *${totalSkipped}* (overdue)\n`;
     if (totalFail > 0) resultTxt += `❌ Gagal   : *${totalFail}*\n`;
     resultTxt += `─────────────────────`;
     if (failedList.length > 0) {
