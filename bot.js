@@ -1396,7 +1396,8 @@ bot.on('callback_query', async (q) => {
         if (newSucc > 0) progressTxt += `\n✅ ${newSucc} baru`;
         if (dups > 0) progressTxt += `\n🔄 ${dups} duplikat`;
         if (fail > 0) progressTxt += `\n❌ ${fail} gagal`;
-        try { await bot.editMessageText(progressTxt, { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown' }); } catch {}
+        try { await bot.editMessageText(progressTxt, { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown' }); }
+        catch (e) { console.log('FF/Excel progress edit error:', e.message); }
       }
       
       // ⏳ Human delay — hanya jika item ini sukses (gagal = skip delay)
