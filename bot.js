@@ -112,13 +112,87 @@ const callStar = (query, vars) => {
     if (e.stdout) stdout = e.stdout; else throw e;
   }
   const json = JSON.parse(stdout);
-  if (json.errors) throw new Error(json.errors.map(e => e.message).join(', '));
+  if (json.errors) {
+    const msgs = json.errors.map(e => e.message).join(', ');
+    const fullLog = JSON.stringify(json.errors).slice(0, 500);
+    console.error('callStar API error:', msgs, '| response:', fullLog);
+    throw new Error(msgs);
+  }
   return json.data;
 };
 
 // ====== WILAYAH UUID (KALIMANTAN TIMUR - PENAJAM) ======
-// Dari hasil reverse-engineering Star API
-const WILAYAH = {
+// ====== WILAYAH MAP ======
+// Kecamatan (subdistrict) UUID — dari Star API
+const SUBDISTRICT_MAP = {
+  'BABULU': { id: 'ebd6524a-9840-ed11-a9b8-8038fbe10c2f', name: 'BABULU' },
+  'PENAJAM': { id: 'e9d6524a-9840-ed11-a9b8-8038fbe10c2f', name: 'PENAJAM' },
+  'SEPAKU': { id: 'ecd6524a-9840-ed11-a9b8-8038fbe10c2f', name: 'SEPAKU' },
+  'WARU': { id: 'ead6524a-9840-ed11-a9b8-8038fbe10c2f', name: 'WARU' },
+};
+// Desa/kelurahan (village) UUID — dari Star API via getAllVillageFromDistrict
+const VILLAGE_MAP = {
+  // BABULU (12)
+  'BABULU DARAT': { id: '5b0bd454-9840-ed11-a9b8-8038fbe10c2f', name: 'BABULU DARAT' },
+  'BABULU LAUT': { id: '5d0bd454-9840-ed11-a9b8-8038fbe10c2f', name: 'BABULU LAUT' },
+  'GUNUNG INTAN': { id: '5e0bd454-9840-ed11-a9b8-8038fbe10c2f', name: 'GUNUNG INTAN' },
+  'GUNUNG MAKMUR': { id: '5f0bd454-9840-ed11-a9b8-8038fbe10c2f', name: 'GUNUNG MAKMUR' },
+  'GUNUNG MULIA': { id: '650bd454-9840-ed11-a9b8-8038fbe10c2f', name: 'GUNUNG MULIA' },
+  'LABANGKA': { id: '5c0bd454-9840-ed11-a9b8-8038fbe10c2f', name: 'LABANGKA' },
+  'LABANGKA BARAT': { id: '660bd454-9840-ed11-a9b8-8038fbe10c2f', name: 'LABANGKA BARAT' },
+  'RAWA MULIA': { id: '610bd454-9840-ed11-a9b8-8038fbe10c2f', name: 'RAWA MULIA' },
+  'RINTIK': { id: '640bd454-9840-ed11-a9b8-8038fbe10c2f', name: 'RINTIK' },
+  'SEBAKUNG JAYA': { id: '600bd454-9840-ed11-a9b8-8038fbe10c2f', name: 'SEBAKUNG JAYA' },
+  'SRI RAHARJA': { id: '620bd454-9840-ed11-a9b8-8038fbe10c2f', name: 'SRI RAHARJA' },
+  'SUMBER SARI': { id: '630bd454-9840-ed11-a9b8-8038fbe10c2f', name: 'SUMBER SARI' },
+  // PENAJAM (23)
+  'BUKIT SUBUR': { id: '540bd454-9840-ed11-a9b8-8038fbe10c2f', name: 'BUKIT SUBUR' },
+  'BULU MINUNG': { id: '4c0bd454-9840-ed11-a9b8-8038fbe10c2f', name: 'BULU MINUNG' },
+  'GERSIK': { id: '500bd454-9840-ed11-a9b8-8038fbe10c2f', name: 'GERSIK' },
+  'GIRI MUKTI': { id: '530bd454-9840-ed11-a9b8-8038fbe10c2f', name: 'GIRI MUKTI' },
+  'GIRIPURWA': { id: '560bd454-9840-ed11-a9b8-8038fbe10c2f', name: 'GIRIPURWA' },
+  'GUNUNG SETELENG': { id: '4b0bd454-9840-ed11-a9b8-8038fbe10c2f', name: 'GUNUNG SETELENG' },
+  'JENEBORA': { id: '510bd454-9840-ed11-a9b8-8038fbe10c2f', name: 'JENEBORA' },
+  'KAMPUNG BARU': { id: '450bd454-9840-ed11-a9b8-8038fbe10c2f', name: 'KAMPUNG BARU' },
+  'LAWE LAWE': { id: '430bd454-9840-ed11-a9b8-8038fbe10c2f', name: 'LAWE LAWE' },
+  'NENANG': { id: '490bd454-9840-ed11-a9b8-8038fbe10c2f', name: 'NENANG' },
+  'NIPAH NIPAH': { id: '480bd454-9840-ed11-a9b8-8038fbe10c2f', name: 'NIPAH NIPAH' },
+  'PANTAI LANGO': { id: '520bd454-9840-ed11-a9b8-8038fbe10c2f', name: 'PANTAI LANGO' },
+  'PEJALA': { id: '440bd454-9840-ed11-a9b8-8038fbe10c2f', name: 'PEJALA' },
+  'PENAJAM': { id: '4a0bd454-9840-ed11-a9b8-8038fbe10c2f', name: 'PENAJAM' },
+  'PETUNG': { id: '420bd454-9840-ed11-a9b8-8038fbe10c2f', name: 'PETUNG' },
+  'RIKO': { id: '4f0bd454-9840-ed11-a9b8-8038fbe10c2f', name: 'RIKO' },
+  'SALOLOANG': { id: '410bd454-9840-ed11-a9b8-8038fbe10c2f', name: 'SALOLOANG' },
+  'SEPAN': { id: '4e0bd454-9840-ed11-a9b8-8038fbe10c2f', name: 'SEPAN' },
+  'SESUMPU': { id: '460bd454-9840-ed11-a9b8-8038fbe10c2f', name: 'SESUMPU' },
+  'SIDOREJO': { id: '550bd454-9840-ed11-a9b8-8038fbe10c2f', name: 'SIDOREJO' },
+  'SOTEK': { id: '4d0bd454-9840-ed11-a9b8-8038fbe10c2f', name: 'SOTEK' },
+  'SUNGAI PARIT': { id: '470bd454-9840-ed11-a9b8-8038fbe10c2f', name: 'SUNGAI PARIT' },
+  'TANJUNG TENGAH': { id: '400bd454-9840-ed11-a9b8-8038fbe10c2f', name: 'TANJUNG TENGAH' },
+  // SEPAKU (15)
+  'ARGO MULYO': { id: '6f0bd454-9840-ed11-a9b8-8038fbe10c2f', name: 'ARGO MULYO' },
+  'BINUANG': { id: '740bd454-9840-ed11-a9b8-8038fbe10c2f', name: 'BINUANG' },
+  'BUKIT RAYA': { id: '680bd454-9840-ed11-a9b8-8038fbe10c2f', name: 'BUKIT RAYA' },
+  'BUMI HARAPAN': { id: '6a0bd454-9840-ed11-a9b8-8038fbe10c2f', name: 'BUMI HARAPAN' },
+  'KARANG JINAWI': { id: '730bd454-9840-ed11-a9b8-8038fbe10c2f', name: 'KARANG JINAWI' },
+  'MARIDAN': { id: '6d0bd454-9840-ed11-a9b8-8038fbe10c2f', name: 'MARIDAN' },
+  'MENTAWIR': { id: '6e0bd454-9840-ed11-a9b8-8038fbe10c2f', name: 'MENTAWIR' },
+  'PEMALUAN': { id: '6c0bd454-9840-ed11-a9b8-8038fbe10c2f', name: 'PEMALUAN' },
+  'SEMOI DUA': { id: '700bd454-9840-ed11-a9b8-8038fbe10c2f', name: 'SEMOI DUA' },
+  'SEPAKU': { id: '6b0bd454-9840-ed11-a9b8-8038fbe10c2f', name: 'SEPAKU' },
+  'SUKARAJA': { id: '690bd454-9840-ed11-a9b8-8038fbe10c2f', name: 'SUKARAJA' },
+  'SUKO MULYO': { id: '710bd454-9840-ed11-a9b8-8038fbe10c2f', name: 'SUKO MULYO' },
+  'TELEMOW': { id: '750bd454-9840-ed11-a9b8-8038fbe10c2f', name: 'TELEMOW' },
+  'TENGIN BARU': { id: '670bd454-9840-ed11-a9b8-8038fbe10c2f', name: 'TENGIN BARU' },
+  'WONOSARI': { id: '720bd454-9840-ed11-a9b8-8038fbe10c2f', name: 'WONOSARI' },
+  // WARU (4)
+  'API API': { id: '570bd454-9840-ed11-a9b8-8038fbe10c2f', name: 'API API' },
+  'BANGUN MULYA': { id: '5a0bd454-9840-ed11-a9b8-8038fbe10c2f', name: 'BANGUN MULYA' },
+  'SESULU': { id: '580bd454-9840-ed11-a9b8-8038fbe10c2f', name: 'SESULU' },
+  'WARU': { id: '590bd454-9840-ed11-a9b8-8038fbe10c2f', name: 'WARU' },
+};
+// Default wilayah (KALIMANTAN TIMUR > PENAJAM PASER UTARA)
+const WILAYAH_DEFAULT = {
   provinceId: 'a1fa5044-9840-ed11-a9b8-8038fbe10c2f',
   provinceName: 'KALIMANTAN TIMUR',
   districtId: '63c5524a-9840-ed11-a9b8-8038fbe10c2f',
@@ -126,10 +200,25 @@ const WILAYAH = {
   subDistrictId: 'ecd6524a-9840-ed11-a9b8-8038fbe10c2f',
   subDistrictName: 'SEPAKU',
   postalCode: '76148',
-  // villageId lookup by name (default: SEPAKU)
   villageId: '6b0bd454-9840-ed11-a9b8-8038fbe10c2f',
   villageName: 'SEPAKU',
 };
+// Helper: resolve wilayah dari nama kecamatan + desa (dari Excel/input)
+function resolveWilayah(kecamatanName, desaName) {
+  const sub = SUBDISTRICT_MAP[kecamatanName] || SUBDISTRICT_MAP['SEPAKU'];
+  const vil = VILLAGE_MAP[desaName] || VILLAGE_MAP['SEPAKU'] || { id: WILAYAH_DEFAULT.villageId, name: WILAYAH_DEFAULT.villageName };
+  return {
+    provinceId: WILAYAH_DEFAULT.provinceId,
+    provinceName: WILAYAH_DEFAULT.provinceName,
+    districtId: WILAYAH_DEFAULT.districtId,
+    districtName: WILAYAH_DEFAULT.districtName,
+    subDistrictId: sub.id,
+    subDistrictName: sub.name,
+    villageId: vil.id,
+    villageName: vil.name,
+    postalCode: WILAYAH_DEFAULT.postalCode,
+  };
+}
 
 // ====== FOLLOW-UP MUTATION ======
 const MUT_FOLLOWUP = `mutation CreateFollowUp($input: DataFollowUpHistoryInputFromCustomers!) {
@@ -176,11 +265,6 @@ const MUT_CREATE = `mutation SubmitCustomerProspect($data: DataCustomerProspectI
 }`;
 const MUT_UPDATE_STATUS = `mutation UpdateCustomerProspect($data: UpdateCustomerProspectStatusInputFromCustomers!) {
   ensureUpdateCustomerProspectStatusFromCustomers(input: $data) { id prospectStatus }
-}`;
-const QRY_LIST = `query GetProspek {
-  getCustomerProspectFromCustomers(first: 100) {
-    nodes { id prospectNumber name mobilePhoneNumber prospectStatus created }
-  }
 }`;
 const QRY_SEARCH = `query GetProspek {
   getCustomerProspectFromCustomers(first: 50) {
@@ -326,6 +410,18 @@ const bot = new TelegramBot(TG_TOKEN, {
     }
   }
 });
+
+// ====== ANTI-DUPLICATE: PID lock file ======
+// Prevents two instances from running simultaneously (causes double responses)
+const PID_FILE = path.join(__dirname, '.bot.pid');
+try {
+  const oldPid = parseInt(fs.readFileSync(PID_FILE, 'utf8').trim(), 10);
+  if (oldPid && oldPid !== process.pid) {
+    try { process.kill(oldPid, 0); console.error(`⚠️ Duplicate instance detected (PID ${oldPid}), killing...`); process.kill(oldPid); } catch (e) { /* not running */ }
+  }
+} catch {}
+fs.writeFileSync(PID_FILE, String(process.pid));
+process.on('exit', () => { try { fs.unlinkSync(PID_FILE); } catch {} });
 
 // In-memory conversation state (persisted to state.json on every set)
 // Safe: only affects bot conversation flow, does NOT touch Star API calls
@@ -582,20 +678,20 @@ const createProspek = async (data) => {
     // Occupation (teks biasa, tidak perlu UUID)
     occupation: data.occupation || 'Wiraswasta',
     religion: 'ISLAM',
-    birthPlace: 'PENAJAM',
   };
   
   // WILAYAH fields only for MEDIUM/HOT — LOW tidak perlu alamat/provinsi/dsb
   if (!isLOW) {
-    body.provinceId = WILAYAH.provinceId;
-    body.provinceName = WILAYAH.provinceName;
-    body.districtId = WILAYAH.districtId;
-    body.districtName = WILAYAH.districtName;
-    body.subDistrictId = WILAYAH.subDistrictId;
-    body.subDistrictName = WILAYAH.subDistrictName;
-    body.villageId = WILAYAH.villageId;
-    body.villageName = WILAYAH.villageName;
-    body.postalCode = WILAYAH.postalCode;
+    const w = resolveWilayah(data.subDistrictName || 'SEPAKU', data.villageName || 'SEPAKU');
+    body.provinceId = w.provinceId;
+    body.provinceName = w.provinceName;
+    body.districtId = w.districtId;
+    body.districtName = w.districtName;
+    body.subDistrictId = w.subDistrictId;
+    body.subDistrictName = w.subDistrictName;
+    body.villageId = w.villageId;
+    body.villageName = w.villageName;
+    body.postalCode = w.postalCode;
     body.rT = data.rt || '001';
     body.rW = data.rw || '001';
     body.address = data.address || 'PENAJAM';
@@ -1158,15 +1254,37 @@ bot.on('callback_query', async (q) => {
     
     const success = [];
     const failed = [];
-    
+    let processedCount = 0;
+    const PROGRESS_INTERVAL = Math.max(3, Math.floor(results.length / 5)); // every ~20%
+    const processedHp = new Set(); // local dedup: skip same HP in one batch
+
+    // Fetch ALL prospects ONCE before loop untuk dedup
+    console.log('FF/Excel: fetching all prospects for dedup check (paginated)...');
+    let allProspects = [];
+    try {
+      allProspects = await callStar(QRY_SEARCH);
+      const allProspectNodes = allProspects?.getCustomerProspectFromCustomers?.nodes || [];
+      console.log('FF/Excel: total prospects fetched:', allProspectNodes.length);
+    } catch (e) {
+      console.error('FF/Excel: failed to fetch prospects for dedup:', e.message);
+      // Lanjut tanpa dedup API — hanya local dedup
+    }
+
     for (const d of results) {
+      processedCount++;
+      
+      // Local dedup: skip if same HP already processed in this batch
+      if (processedHp.has(d.hp)) {
+        console.log('FF/Excel: skip duplicate HP in batch:', d.hp, d.nama);
+        failed.push({ nama: d.nama, hp: d.hp, reason: 'HP duplikat dalam 1 file Excel' });
+        continue;
+      }
+      processedHp.add(d.hp);
+      
       try {
-        // STRATEGY: fetch all, filter client-side by HP
-        console.log('FF/Excel: fetching all prospects for dedup check...');
-        const allData = await callStar(QRY_SEARCH);
-        const allNodes = allData?.getCustomerProspectFromCustomers?.nodes || [];
-        console.log('FF/Excel: total prospects fetched:', allNodes.length);
-        const node = allNodes.find(n => n.mobilePhoneNumber === d.hp);
+        // Cek existing HP dari data yang sudah di-fetch sebelum loop
+        const allProspectNodes = Array.isArray(allProspects) ? allProspects : (allProspects?.getCustomerProspectFromCustomers?.nodes || []);
+        const node = allProspectNodes.find(n => n.mobilePhoneNumber === d.hp);
         if (node) {
           // HP sudah terdaftar — skip, jangan input ulang
           success.push({ nama: d.nama, prospectNumber: node.prospectNumber, duplicate: true });
@@ -1191,21 +1309,21 @@ bot.on('callback_query', async (q) => {
           channelName: jwtChannelName(),
           occupation: d.pekerjaan,
           religion: d.agama,
-          birthPlace: 'PENAJAM',
           description: '',
         };
 
         // WILAYAH only for MEDIUM/HOT — LOW tidak perlu alamat/provinsi/dsb
         if (!isLOW) {
-          body.provinceId = WILAYAH.provinceId;
-          body.provinceName = WILAYAH.provinceName;
-          body.districtId = WILAYAH.districtId;
-          body.districtName = WILAYAH.districtName;
-          body.subDistrictId = WILAYAH.subDistrictId;
-          body.subDistrictName = WILAYAH.subDistrictName;
-          body.villageId = WILAYAH.villageId;
-          body.villageName = WILAYAH.villageName;
-          body.postalCode = WILAYAH.postalCode;
+          const w = resolveWilayah(d.kecamatan, d.desa);
+          body.provinceId = w.provinceId;
+          body.provinceName = w.provinceName;
+          body.districtId = w.districtId;
+          body.districtName = w.districtName;
+          body.subDistrictId = w.subDistrictId;
+          body.subDistrictName = w.subDistrictName;
+          body.villageId = w.villageId;
+          body.villageName = w.villageName;
+          body.postalCode = w.postalCode;
           body.rT = d.rt;
           body.rW = d.rw;
           body.address = `${d.alamat}`;
@@ -1268,12 +1386,28 @@ bot.on('callback_query', async (q) => {
         failed.push({ nama: d.nama, hp: d.hp, reason: e.message || 'Unknown error' });
       }
       
-      // ⏳ Human delay — zigzag sesuai level (HOT paling lama karena banyak field)
-      const levelDelayPool = s.ff_level === 'HOT' ? [3, 5, 7] :
-                             s.ff_level === 'LOW' ? [1, 2, 3] :
-                                                     [2, 4, 5]; // MEDIUM
-      const baseMin = levelDelayPool[Math.floor(Math.random() * levelDelayPool.length)];
-      await new Promise(r => setTimeout(r, humanDelay(baseMin)));
+      // Progress notification — before delay, biar user langsung tau hasil
+      const showProgress = (processedCount % PROGRESS_INTERVAL === 0 || processedCount === results.length || results.length <= 3);
+      if (showProgress) {
+        const newSucc = success.filter(s => !s.duplicate).length;
+        const dups = success.filter(s => s.duplicate).length;
+        const fail = failed.length;
+        let progressTxt = `⏳ *Progress: ${processedCount}/${results.length}*`;
+        if (newSucc > 0) progressTxt += `\n✅ ${newSucc} baru`;
+        if (dups > 0) progressTxt += `\n🔄 ${dups} duplikat`;
+        if (fail > 0) progressTxt += `\n❌ ${fail} gagal`;
+        try { await bot.editMessageText(progressTxt, { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown' }); } catch {}
+      }
+      
+      // ⏳ Human delay — hanya jika item ini sukses (gagal = skip delay)
+      const currentFailed = failed.find(f => f.hp === d.hp);
+      if (!currentFailed) {
+        const levelDelayPool = s.ff_level === 'HOT' ? [3, 5, 7] :
+                               s.ff_level === 'LOW' ? [1, 2, 3] :
+                                                       [2, 4, 5]; // MEDIUM
+        const baseMin = levelDelayPool[Math.floor(Math.random() * levelDelayPool.length)];
+        await new Promise(r => setTimeout(r, humanDelay(baseMin)));
+      }
     }
     
     // Build result message — limit each section to avoid Telegram 4096 char limit
@@ -1495,7 +1629,8 @@ bot.on('callback_query', async (q) => {
     const prospectId = data.split(':')[2];
     try {
       const result = await callStar(QRY_SEARCH);
-      const node = result?.getCustomerProspectFromCustomers?.nodes?.find(n => n.id === prospectId);
+      const allNodes = result?.getCustomerProspectFromCustomers?.nodes || [];
+      const node = allNodes.find(n => n.id === prospectId);
       if (!node) return editMsg(chatId, msgId, '❌ Tidak ditemukan.', backBtn('menu'));
       
       const curStatus = node.prospectStatus;
@@ -2730,7 +2865,7 @@ async function runEomReset() {
   if (!jwt) { console.log('EOM: no JWT'); return; }
   try {
     console.log('EOM: fetching active prospects...');
-    const result = await callStar(QRY_LIST, { first: 200, where: { prospectStatus: { in: ['LOW','MEDIUM','HOT','PROSPECT'] } } });
+    const result = await callStar(QRY_SEARCH);
     const nodes = result?.getCustomerProspectFromCustomers?.nodes || [];
     console.log(`EOM: found ${nodes.length} active prospects`);
     let updated = 0;
@@ -2758,32 +2893,6 @@ function checkEom() {
     runEomReset();
   }
 }
-
-// ====== REPLY KEYBOARD HANDLER ======
-// Handles Reply Keyboard buttons tapped by user (text-based, not callback_data)
-bot.on('message', (msg) => {
-  if (!msg.text) return;
-  if (msg.text.startsWith('/')) return;
-
-  // Route to callback equivalents
-  const routes = {
-    '📝 Prospek LOW':      'create:LOW',
-    '📝 Prospek MEDIUM':   'create:MEDIUM',
-    '📝 Prospek HOT':      'create:HOT',
-    '⬆️ Upgrade Status':   'upgrade:menu',
-    '📋 Cari Prospek':     'search:menu',
-    '📊 FF / Excel':       'ff:menu',
-    '🔑 Set JWT':          'setjwt',
-    '🚫 Bulk Not Deal':    'notdeal:menu',
-    '🔐 Akun':             'accounts:menu',
-  };
-
-  const cbData = routes[msg.text];
-  if (cbData) {
-    // Pretend it's a callback — call handleCallback
-    handleCallback(cbData, msg.chat.id, null, null);
-  }
-});
 
 // ====== START ======
 checkEom();
