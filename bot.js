@@ -1248,9 +1248,14 @@ bot.on('callback_query', async (q) => {
     
     const results = s.ff_data;
     const errors = s.ff_errors || [];
-    
+
+    // Hitung estimasi waktu
+    const avgMinPerItem = s.ff_level === 'HOT' ? 5 : s.ff_level === 'LOW' ? 2 : 4;
+    const totalEstMin = Math.round(results.length * avgMinPerItem);
+    const fmtTime = (min) => min < 60 ? `${min} menit` : `${Math.floor(min/60)} jam ${min%60} menit`;
+
     // Confirm to user
-    await editMsg(chatId, msgId, `⏳ *Memproses ${results.length} data...*\n\nIni akan memakan waktu beberapa saat.`, {});
+    await editMsg(chatId, msgId, `⏳ *Memproses ${results.length} data...*\n\nEstimasi: ~${fmtTime(totalEstMin)}\nProgress akan diupdate otomatis.`, {});
     
     const success = [];
     const failed = [];
@@ -1392,10 +1397,13 @@ bot.on('callback_query', async (q) => {
         const newSucc = success.filter(s => !s.duplicate).length;
         const dups = success.filter(s => s.duplicate).length;
         const fail = failed.length;
+        const remaining = results.length - processedCount;
+        const sisaMenit = Math.round(remaining * avgMinPerItem);
         let progressTxt = `⏳ *Progress: ${processedCount}/${results.length}*`;
         if (newSucc > 0) progressTxt += `\n✅ ${newSucc} baru`;
         if (dups > 0) progressTxt += `\n🔄 ${dups} duplikat`;
         if (fail > 0) progressTxt += `\n❌ ${fail} gagal`;
+        progressTxt += `\n⏱ Sisa: ~${fmtTime(sisaMenit)}`;
         try { await bot.editMessageText(progressTxt, { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown' }); }
         catch (e) { console.log('FF/Excel progress edit error:', e.message); }
       }
