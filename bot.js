@@ -868,11 +868,18 @@ function buildAccountsMenuKeyboard(accounts) {
     );
     if (!members.length) continue;
     rows.push([{ text: `▸ ${grp}`, callback_data: 'noop' }]);
+    // Grid 2 kolom untuk members
+    let row = [];
     for (const a of members) {
       const st = VAULT.getJwtStatus(a.code);
       const { emoji, label } = _s(st);
-      rows.push([{ text: `${emoji}  ${a.code}  ·  ${label}`, callback_data: `accounts:detail:${a.code}` }]);
+      row.push({ text: `${emoji} ${a.code}`, callback_data: `accounts:detail:${a.code}` });
+      if (row.length === 2) {
+        rows.push(row);
+        row = [];
+      }
     }
+    if (row.length > 0) rows.push(row); // sisa 1 button
   }
   // Accounts not in any team group
   const orphaned = accounts.filter(a => {
@@ -885,11 +892,17 @@ function buildAccountsMenuKeyboard(accounts) {
   });
   if (orphaned.length) {
     rows.push([{ text: `▸ LAINNYA`, callback_data: 'noop' }]);
+    let row = [];
     for (const a of orphaned) {
       const st = VAULT.getJwtStatus(a.code);
       const { emoji, label } = _s(st);
-      rows.push([{ text: `${emoji}  ${a.dealerName || a.code}  ·  ${label}`, callback_data: `accounts:detail:${a.code}` }]);
+      row.push({ text: `${emoji} ${a.dealerName || a.code}`, callback_data: `accounts:detail:${a.code}` });
+      if (row.length === 2) {
+        rows.push(row);
+        row = [];
+      }
     }
+    if (row.length > 0) rows.push(row);
   }
   rows.push([{ text: '───────────────────', callback_data: 'noop' }]);
   rows.push([{ text: '➕ Tambah Akun', callback_data: 'accounts:add:start' }]);
@@ -1703,6 +1716,13 @@ bot.on('callback_query', async (q) => {
     const reason = NOTDEAL_REASON;
     const statusLabel = targetStatus === 'ALL' ? 'HOT + MEDIUM + LOW' : targetStatus;
 
+    // ⏳ Info ke user: sedang mengambil data (fetch pagination bisa lama)
+    await editMsg(chatId, msgId,
+      `⏳ *Mengambil data prospek...*\n\n` +
+      `Status : *${statusLabel}*\n` +
+      `Mohon tunggu sebentar, sedang menghitung jumlah prospek.`,
+      {});
+
     // Collect ALL prospect names per status (paginated, S0001-safe)
     const statuses = targetStatus === 'ALL' ? ['HOT', 'MEDIUM', 'LOW'] : [targetStatus];
     const counts = {};
@@ -1806,7 +1826,23 @@ bot.on('callback_query', async (q) => {
       ensureUpdateCustomerProspectStatusFromCustomers(input: $data) { id name prospectStatus }
     }`;
 
+    // ⏳ Loading message dengan estimasi durasi — supaya user tahu proses berjalan
+    const ndTotal = s._ndTotal || 0;
+    const estTxt = ndTotal <= 0 ? 'beberapa saat' : `${Math.max(Math.round(ndTotal * 7.5 / 60), 1)} menit`; // ~7.5 detik/prospek
+    let progressMsgId = null;
+    try {
+      const pm = await bot.sendMessage(chatId,
+        `⏳ *Memproses Bulk Not Deal...*\n\n` +
+        `Total   : *${ndTotal}* prospek\n` +
+        `Estimasi : *${estTxt}*\n\n` +
+        `Progress : 0/${ndTotal}\n` +
+        `_Mohon tunggu, jangan tekan tombol lagi._`,
+        { parse_mode: 'Markdown' });
+      progressMsgId = pm.message_id;
+    } catch (e) { console.log('notdeal loading msg error:', e.message); }
+
     let totalOk = 0, totalFail = 0, totalSkipped = 0;
+    let processedCount = 0;
     const failedList = [];
     const okHot = [], okMed = [], okLow = [];
 
@@ -1826,8 +1862,9 @@ bot.on('callback_query', async (q) => {
 
           for (const p of nodes) {
             if (p.prospectStatus === 'LOST' || p.prospectStatus === 'DEAL') {
-              totalSkipped++; continue;
+              totalSkipped++; processedCount++; continue;
             }
+            let ok = false;
             try {
               // Set prospect status → LOST dengan alasan "Ada keperluan lain".
               // reasonNotDeal = plain string bebas (bukan enum), kirim display string
@@ -1838,6 +1875,7 @@ bot.on('callback_query', async (q) => {
               //    aktifkan ulang prospek → tidak jadi Lost (bug dobel follow-up).
               callStar(MUT_ND, { data: { customerProspectId: p.id, prospectStatus: 'LOST', reasonNotDeal: NOTDEAL_REASON } });
               totalOk++;
+              ok = true;
               if (st === 'HOT') okHot.push(p.name);
               else if (st === 'MEDIUM') okMed.push(p.name);
               else okLow.push(p.name);
@@ -1845,8 +1883,38 @@ bot.on('callback_query', async (q) => {
               totalFail++;
               if (failedList.length < 5) failedList.push(`${p.name}: ${e.message}`);
             }
-            // ⏳ Human delay — zigzag 1-5 menit antar prospek not deal
-            await new Promise(r => setTimeout(r, humanDelay(3)));
+            processedCount++;
+
+            // 📊 Update progress tiap prospek (edit pesan loading yang sama)
+            if (progressMsgId) {
+              let ptxt = `⏳ *Memproses Bulk Not Deal...*\n\n`;
+              ptxt += `Progress : *${processedCount}/${ndTotal}*\n`;
+              if (totalOk > 0) ptxt += `✅ Berhasil : ${totalOk}\n`;
+              if (totalSkipped > 0) ptxt += `⏭️ Skip : ${totalSkipped}\n`;
+              if (totalFail > 0) ptxt += `❌ Gagal : ${totalFail}\n`;
+              ptxt += `\n_Mohon tunggu, jangan tekan tombol lagi._`;
+              try {
+                await bot.editMessageText(ptxt, { chat_id: chatId, message_id: progressMsgId, parse_mode: 'Markdown' });
+              } catch (e) { console.log('notdeal progress edit error:', e.message); }
+            }
+
+            // ⏳ Human delay — zigzag 5-10 detik antar prospek not deal (hanya jika sukses)
+            if (ok) {
+              await new Promise(r => setTimeout(r, 5000 + Math.floor(Math.random() * 6000)));
+              // Setiap 15 proses sukses, tambah jeda 3-4 menit
+              if (totalOk > 0 && totalOk % 15 === 0) {
+                const extraMs = 180000 + Math.floor(Math.random() * 60000); // 3-4 menit
+                if (progressMsgId) {
+                  try {
+                    await bot.editMessageText(
+                      `⏳ *Istirahat sejenak...*\n\nSudah *${totalOk}* prospek diproses.\nJeda 3-4 menit agar tidak terdeteksi spam.\n\n_Mohon tunggu..._`,
+                      { chat_id: chatId, message_id: progressMsgId, parse_mode: 'Markdown' }
+                    );
+                  } catch (e) {}
+                }
+                await new Promise(r => setTimeout(r, extraMs));
+              }
+            }
           }
 
           hasMore = pi.hasNextPage;
