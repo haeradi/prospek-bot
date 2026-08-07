@@ -2115,8 +2115,8 @@ bot.on('callback_query', async (q) => {
         totalFail++;
         if (failedList.length < 5) failedList.push(`${lead.customerName}: ${e.message}`);
       }
-      // ⏳ Human delay — zigzag 1-5 menit antar leads follow-up
-      await new Promise(r => setTimeout(r, humanDelay(3)));
+      // ⏳ Human delay — dipercepat jadi 30 detik antar leads follow-up
+      await new Promise(r => setTimeout(r, humanDelay(0.5)));
     }
 
     conv.delete(chatId);
@@ -2212,8 +2212,8 @@ bot.on('callback_query', async (q) => {
         totalFail++;
         if (failedList.length < 5) failedList.push(`${lead.customerName}: ${e.message}`);
       }
-      // ⏳ Human delay — zigzag 1-5 menit antar leads follow-up
-      await new Promise(r => setTimeout(r, humanDelay(3)));
+      // ⏳ Human delay — dipercepat jadi 30 detik antar leads follow-up
+      await new Promise(r => setTimeout(r, humanDelay(0.5)));
     }
 
     conv.delete(chatId);

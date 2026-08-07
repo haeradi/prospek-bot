@@ -98,14 +98,18 @@ async function runLogin() {
   const page = await ctx.newPage();
 
   // Shared state between response handler and main loop
-  const tokenState = { starApiSeen: false, saved: false };
+  const tokenState = { starApiSeen: false, saved: false, mfaNotified: false };
   const tokenPath = path.join(LOG_DIR, `token-${accountCode}.json`);
 
   // Capture Star API requests
   page.on('response', resp => {
     if (resp.url().includes('api.star.astra.co.id')) {
       tokenState.starApiSeen = true;
-      updateStatus('login', `🔐 [${accountCode}] Star API request detected — MFA approved!`);
+      // Kirim notif MFA approved hanya 1x
+      if (!tokenState.mfaNotified) {
+        updateStatus('login', `🔐 [${accountCode}] Star API request detected — MFA approved!`);
+        tokenState.mfaNotified = true;
+      }
     }
   });
 
