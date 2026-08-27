@@ -77,6 +77,10 @@ test('sales tidak dapat membuat prospek tanpa CSRF atau dengan data tidak valid'
  const invalid=await request(base,'/api/prospects',{method:'POST',headers:{cookie:c,'x-csrf-token':l.body.csrfToken},body:JSON.stringify({customerName:'X',phone:'abc',level:'SUPER HOT'})}); assert.equal(invalid.status,400);
 });
 
+test('halaman publik mengirim security headers produksi',async()=>{
+ const r=await fetch(base+'/');assert.equal(r.status,200);assert.equal(r.headers.get('x-frame-options'),'DENY');assert.match(r.headers.get('content-security-policy'),/default-src 'self'/);assert.equal(r.headers.get('strict-transport-security'),'max-age=31536000; includeSubDomains');
+});
+
 test('hanya admin dapat membaca audit log yang tidak mengandung secret',async()=>{
  const s=app.services.users.create({...sales,email:'audit.sales@example.invalid',phone:'081244444444',salesCode:'AUDIT1',status:'ACTIVE'});
  const sl=await request(base,'/api/login',{method:'POST',body:JSON.stringify({email:s.email,password:sales.password})});const sc=sl.headers.get('set-cookie').split(';')[0];

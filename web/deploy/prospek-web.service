@@ -1,0 +1,31 @@
+[Unit]
+Description=Portal Prospek Web (companion to Telegram bot)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=prospekweb
+Group=prospekweb
+WorkingDirectory=/opt/prospek-web
+EnvironmentFile=/etc/prospek-web.env
+ExecStart=/usr/local/lib/prospek-web/node /opt/prospek-web/src/server.js
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/prospek-web
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

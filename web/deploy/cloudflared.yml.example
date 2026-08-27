@@ -1,0 +1,9 @@
+tunnel: TUNNEL_UUID
+credentials-file: /etc/cloudflared/prospek-web.json
+no-autoupdate: true
+ingress:
+  - hostname: prospek.example.com
+    service: http://127.0.0.1:3210
+    originRequest:
+      connectTimeout: 10s
+  - service: http_status:404

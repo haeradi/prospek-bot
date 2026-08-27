@@ -1,0 +1,24 @@
+[Unit]
+Description=Cloudflare Tunnel for Portal Prospek
+After=network-online.target prospek-web.service
+Wants=network-online.target
+Requires=prospek-web.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/cloudflared --config /etc/cloudflared/prospek-web.yml tunnel run
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

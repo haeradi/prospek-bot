@@ -47,6 +47,10 @@ Environment produksi wajib:
 
 Publikasikan melalui reverse proxy/Cloudflare Tunnel ke `127.0.0.1:3210`. Jangan membuka port aplikasi langsung ke internet.
 
+Deployment produksi menggunakan user Linux dan service terpisah dari bot. Template terverifikasi tersedia di `deploy/`. Credential tunnel, `.env`, database, dan password admin tidak termasuk repository.
+
+URL produksi Astra Motor Penajam: `https://prospek.radi.biz.id`.
+
 ## Batas fase ini
 
 Mutasi ASSIST, login Microsoft MFA, dan upload Excel belum diaktifkan. UI menandainya dengan jelas. Tahap berikutnya akan mengekstrak ASSIST client menjadi modul bersama tanpa menghentikan bot Telegram.
