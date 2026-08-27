@@ -12,7 +12,7 @@ Portal saat ini **belum feature-parity** dengan bot. Portal sudah kuat sebagai f
 | Koneksi ASSIST per sales + MFA job | ✅ Ada | Padanan parsial relogin/JWT, tetapi modelnya per-user terenkripsi, bukan vault global/file JWT bot. |
 | Input LOW/MEDIUM/HOT | 🟡 Parsial lokal | Form dan draft SQLite ada; field dan validasi belum parity; **tidak dikirim ke STAR**. |
 | Daftar prospek | 🟡 Parsial lokal | Hanya draft portal sendiri, bukan `getCustomerProspectFromCustomers`. |
-| Cari/detail prospek STAR | ❌ Belum | Tidak ada STAR client/query. |
+| Cari/detail prospek STAR | ✅ Read-only | Query per akun Sales dari vault terenkripsi; search/filter/detail owner-scoped, Admin tenant-scoped dengan PII masking. |
 | Upgrade status STAR | ❌ Belum | PATCH web hanya mengubah `level` draft lokal, termasuk boleh turun. |
 | Aktivitas clock-in/out | ❌ Belum | Tidak ada query/report BTL/POS. |
 | FF/Excel/text batch | ❌ Belum | Tidak ada parser/upload/preview/job runner. |
