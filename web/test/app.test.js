@@ -77,6 +77,15 @@ test('sales tidak dapat membuat prospek tanpa CSRF atau dengan data tidak valid'
  const invalid=await request(base,'/api/prospects',{method:'POST',headers:{cookie:c,'x-csrf-token':l.body.csrfToken},body:JSON.stringify({customerName:'X',phone:'abc',level:'SUPER HOT'})}); assert.equal(invalid.status,400);
 });
 
+test('hanya admin dapat membaca audit log yang tidak mengandung secret',async()=>{
+ const s=app.services.users.create({...sales,email:'audit.sales@example.invalid',phone:'081244444444',salesCode:'AUDIT1',status:'ACTIVE'});
+ const sl=await request(base,'/api/login',{method:'POST',body:JSON.stringify({email:s.email,password:sales.password})});const sc=sl.headers.get('set-cookie').split(';')[0];
+ const denied=await request(base,'/api/admin/audit',{headers:{cookie:sc}});assert.equal(denied.status,403);
+ const al=await request(base,'/api/login',{method:'POST',body:JSON.stringify({email:'admin@example.invalid',password:'AdminPassword!123'})});const ac=al.headers.get('set-cookie').split(';')[0];
+ const audit=await request(base,'/api/admin/audit',{headers:{cookie:ac}});assert.equal(audit.status,200);assert.ok(audit.body.logs.some(x=>x.action==='LOGIN'));
+ const serialized=JSON.stringify(audit.body);assert.equal(serialized.includes('Password'),false);assert.equal(serialized.includes('id_hash'),false);assert.equal(serialized.includes('csrf'),false);
+});
+
 test('login dibatasi setelah percobaan gagal berulang',async()=>{
  for(let i=0;i<5;i++){const r=await request(base,'/api/login',{method:'POST',headers:{'x-forwarded-for':'198.51.100.9'},body:JSON.stringify({email:'unknown@example.invalid',password:'WrongPassword!123'})});assert.equal(r.status,401)}
  const blocked=await request(base,'/api/login',{method:'POST',headers:{'x-forwarded-for':'198.51.100.9'},body:JSON.stringify({email:'unknown@example.invalid',password:'WrongPassword!123'})});assert.equal(blocked.status,429);assert.equal(blocked.body.code,'RATE_LIMITED');
