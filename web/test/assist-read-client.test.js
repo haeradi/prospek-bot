@@ -1,0 +1,27 @@
+'use strict';
+const test=require('node:test'),assert=require('node:assert/strict');
+const {createAssistReadClient}=require('../src/assist-read-client');
+
+test('prospek dipaginasi penuh dan diproyeksikan aman',async()=>{
+ const calls=[];const client=createAssistReadClient({transport:async({token,query,variables})=>{calls.push({token,query,variables});return variables.after?{data:{getCustomerProspectFromCustomers:{nodes:[{id:'p2',prospectNumber:'H704-2',name:'Budi',mobilePhoneNumber:'62812',prospectStatus:'HOT',created:'2026-08-02',iDNumber:'6401',address:'Alamat',description:'D',catalogueUnitColorDescription:'PCX'}],pageInfo:{hasNextPage:false,endCursor:null}}}}:{data:{getCustomerProspectFromCustomers:{nodes:[{id:'p1',prospectNumber:'H704-1',name:'Ani',mobilePhoneNumber:'62811',prospectStatus:'MEDIUM',created:'2026-08-01'}],pageInfo:{hasNextPage:true,endCursor:'c1'}}}}}});const rows=await client.listProspects('secret-token');assert.equal(rows.length,2);assert.equal(calls.length,2);assert.equal(calls[1].variables.after,'c1');assert.deepEqual(Object.keys(rows[0]).sort(),['address','createdAt','description','id','motor','name','nik','phone','prospectNumber','status'].sort());assert.equal(JSON.stringify(rows).includes('secret-token'),false);
+});
+
+test('leads new dan ontrack dedup, new overdue dibuang',async()=>{
+ const client=createAssistReadClient({transport:async({variables})=>({data:{leadsByAssignmentFromCrm:{nodes:[{activityLeadsAssignmentId:'a1',leadsId:'l1',customerName:'Ani',telephoneNo:'081',isOverdue:false,isOntrack:variables.ontrack},{activityLeadsAssignmentId:'a1',leadsId:'l1',customerName:'Ani Dupe',telephoneNo:'081',isOverdue:false,isOntrack:variables.ontrack},{activityLeadsAssignmentId:'a2',leadsId:'l2',customerName:'Expired',telephoneNo:'082',isOverdue:true,isOntrack:false}],pageInfo:{hasNextPage:false,endCursor:null}}}})});assert.equal((await client.listLeads('token','NEW')).length,1);assert.equal((await client.listLeads('token','ON_TRACK')).length,2);
+});
+
+test('GraphQL error disanitasi tanpa token atau detail upstream',async()=>{
+ const client=createAssistReadClient({transport:async()=>({errors:[{message:'Bearer secret-token internal stack'}]})});await assert.rejects(()=>client.listProspects('secret-token'),e=>e.code==='ASSIST_REAUTH_REQUIRED'&&!e.message.includes('secret-token'));
+});
+
+test('pagination loop dan page limit ditolak',async()=>{
+ const client=createAssistReadClient({maxPages:2,transport:async()=>({data:{getCustomerProspectFromCustomers:{nodes:[],pageInfo:{hasNextPage:true,endCursor:'same'}}}})});await assert.rejects(()=>client.listProspects('token'),e=>e.code==='ASSIST_PAGINATION_INVALID');
+});
+
+test('deadline berlaku untuk keseluruhan pagination dan abort eksternal',async()=>{
+ const transport=({signal})=>new Promise((resolve,reject)=>{const t=setTimeout(()=>resolve({data:{getCustomerProspectFromCustomers:{nodes:[],pageInfo:{hasNextPage:true,endCursor:String(Date.now())}}}}),80);signal.addEventListener('abort',()=>{clearTimeout(t);reject(Object.assign(new Error('aborted'),{name:'AbortError'}))},{once:true})}),client=createAssistReadClient({timeoutMs:100,transport});const started=Date.now();await assert.rejects(()=>client.listProspects('token'),e=>e.code==='ASSIST_TIMEOUT');assert.ok(Date.now()-started<250);const c=new AbortController(),p=client.listProspects('token',{signal:c.signal});c.abort();await assert.rejects(()=>p,e=>e.code==='ASSIST_TIMEOUT')
+});
+
+test('schema pageInfo ketat dan prospek dedup lintas halaman',async()=>{
+ const bad=createAssistReadClient({transport:async()=>({data:{getCustomerProspectFromCustomers:{nodes:[],pageInfo:{hasNextPage:'yes',endCursor:null}}}})});await assert.rejects(()=>bad.listProspects('token'),e=>e.code==='ASSIST_RESPONSE_INVALID');let n=0;const dedup=createAssistReadClient({transport:async()=>({data:{getCustomerProspectFromCustomers:{nodes:[{id:'same'}],pageInfo:n++?{hasNextPage:false,endCursor:null}:{hasNextPage:true,endCursor:'next'}}}})});assert.equal((await dedup.listProspects('token')).length,1)
+});
