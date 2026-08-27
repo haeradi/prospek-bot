@@ -10,7 +10,8 @@ async function request(base, path, options={}) {
 
 let server,base,app;
 const sales={fullName:'Sales Demo',email:'sales@example.invalid',phone:'081234567890',salesCode:'DEMO01',dealerCode:'H704',password:'StrongPassword!123'};
-test.beforeEach(async()=>{ app=createApp({dbPath:':memory:',adminEmail:'admin@example.invalid',adminPassword:'AdminPassword!123',assistMasterKey:Buffer.alloc(32,7).toString('base64')}); server=app.server; await new Promise(r=>server.listen(0,'127.0.0.1',r)); base=`http://127.0.0.1:${server.address().port}`; });
+let fakeLoginRunner;
+test.beforeEach(async()=>{ fakeLoginRunner=async({emit,signal})=>{emit({status:'MFA_REQUIRED',mfaNumber:'42'});await new Promise((resolve,reject)=>{const t=setTimeout(resolve,15);signal.addEventListener('abort',()=>{clearTimeout(t);reject(Object.assign(new Error('aborted'),{name:'AbortError'}))},{once:true})});return{accessToken:'synthetic-worker-access-token',refreshToken:'synthetic-worker-refresh-token',subjectId:'worker-subject',displayName:'Sales Worker',email:'worker@example.invalid',expiresAt:'2030-01-01T00:00:00.000Z'}};app=createApp({dbPath:':memory:',adminEmail:'admin@example.invalid',adminPassword:'AdminPassword!123',assistMasterKey:Buffer.alloc(32,7).toString('base64'),assistLoginRunner:fakeLoginRunner,assistLoginTimeoutMs:500}); server=app.server; await new Promise(r=>server.listen(0,'127.0.0.1',r)); base=`http://127.0.0.1:${server.address().port}`; });
 test.afterEach(async()=>{ await new Promise(r=>server.close(r)); app.close(); });
 
 test('registrasi sales selalu PENDING dan tidak dapat login sebelum approval',async()=>{
@@ -102,6 +103,18 @@ test('vault ASSIST terenkripsi, terisolasi per Sales, dan token tidak keluar API
  const noCsrf=await request(base,'/api/assist/connection',{method:'DELETE',headers:{cookie:c1},body:'{}'});assert.equal(noCsrf.status,403);
  const disconnected=await request(base,'/api/assist/connection',{method:'DELETE',headers:{cookie:c1,'x-csrf-token':l1.body.csrfToken},body:'{}'});assert.equal(disconnected.status,200);
  assert.equal(app.db.prepare('SELECT count(*) n FROM assist_connections WHERE user_id=?').get(s1.id).n,0);
+});
+
+test('login job ASSIST bounded, owner-only, dan success langsung masuk vault',async()=>{
+ const s1=app.services.users.create({...sales,email:'job1@example.invalid',phone:'081222222221',salesCode:'JOB01',status:'ACTIVE'}),s2=app.services.users.create({...sales,email:'job2@example.invalid',phone:'081222222222',salesCode:'JOB02',status:'ACTIVE'});
+ const l1=await request(base,'/api/login',{method:'POST',body:JSON.stringify({email:s1.email,password:sales.password})}),c1=l1.headers.get('set-cookie').split(';')[0];
+ const started=await request(base,'/api/assist/login-jobs',{method:'POST',headers:{cookie:c1,'x-csrf-token':l1.body.csrfToken},body:JSON.stringify({username:'worker@example.invalid',password:'SyntheticAssistPassword!123'})});assert.equal(started.status,202);assert.ok(started.body.job.id);assert.equal(JSON.stringify(started.body).includes('SyntheticAssistPassword'),false);
+ const duplicate=await request(base,'/api/assist/login-jobs',{method:'POST',headers:{cookie:c1,'x-csrf-token':l1.body.csrfToken},body:JSON.stringify({username:'worker@example.invalid',password:'SyntheticAssistPassword!123'})});assert.equal(duplicate.status,409);
+ const l2=await request(base,'/api/login',{method:'POST',body:JSON.stringify({email:s2.email,password:sales.password})}),c2=l2.headers.get('set-cookie').split(';')[0];
+ const foreign=await request(base,`/api/assist/login-jobs/${started.body.job.id}`,{headers:{cookie:c2}});assert.equal(foreign.status,404);
+ await new Promise(r=>setTimeout(r,40));const done=await request(base,`/api/assist/login-jobs/${started.body.job.id}`,{headers:{cookie:c1}});assert.equal(done.status,200);assert.equal(done.body.job.status,'SUCCEEDED');assert.equal(JSON.stringify(done.body).includes('synthetic-worker-access-token'),false);assert.equal(JSON.stringify(done.body).includes('SyntheticAssistPassword'),false);
+ const rawJob=app.db.prepare('SELECT * FROM login_jobs WHERE id=?').get(started.body.job.id);assert.equal(JSON.stringify(rawJob).includes('SyntheticAssistPassword'),false);assert.equal(JSON.stringify(rawJob).includes('synthetic-worker-access-token'),false);
+ const conn=app.db.prepare('SELECT * FROM assist_connections WHERE user_id=?').get(s1.id);assert.ok(conn);assert.equal(JSON.stringify(conn).includes('synthetic-worker-access-token'),false);
 });
 
 test('login dibatasi setelah percobaan gagal berulang',async()=>{
