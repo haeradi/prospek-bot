@@ -9,6 +9,9 @@ User=prospekweb
 Group=prospekweb
 WorkingDirectory=/opt/prospek-web
 EnvironmentFile=/etc/prospek-web.env
+Environment=PORTAL_DATA_DIR=/var/lib/prospek-web/data
+StateDirectory=prospek-web
+StateDirectoryMode=0700
 ExecStart=/usr/local/lib/prospek-web/node /opt/prospek-web/src/server.js
 Restart=on-failure
 RestartSec=5
