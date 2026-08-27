@@ -44,6 +44,7 @@ Environment produksi wajib:
 - `PORTAL_ADMIN_EMAIL`
 - `PORTAL_ADMIN_PASSWORD` minimal 12 karakter
 - `PORT` opsional, default `3210`
+- `ASSIST_MASTER_KEY` wajib sebelum koneksi ASSIST diaktifkan; base64 dari 32 byte acak, disimpan hanya di environment produksi permission `0600`
 
 Publikasikan melalui reverse proxy/Cloudflare Tunnel ke `127.0.0.1:3210`. Jangan membuka port aplikasi langsung ke internet.
 

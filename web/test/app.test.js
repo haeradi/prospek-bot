@@ -10,7 +10,7 @@ async function request(base, path, options={}) {
 
 let server,base,app;
 const sales={fullName:'Sales Demo',email:'sales@example.invalid',phone:'081234567890',salesCode:'DEMO01',dealerCode:'H704',password:'StrongPassword!123'};
-test.beforeEach(async()=>{ app=createApp({dbPath:':memory:',adminEmail:'admin@example.invalid',adminPassword:'AdminPassword!123'}); server=app.server; await new Promise(r=>server.listen(0,'127.0.0.1',r)); base=`http://127.0.0.1:${server.address().port}`; });
+test.beforeEach(async()=>{ app=createApp({dbPath:':memory:',adminEmail:'admin@example.invalid',adminPassword:'AdminPassword!123',assistMasterKey:Buffer.alloc(32,7).toString('base64')}); server=app.server; await new Promise(r=>server.listen(0,'127.0.0.1',r)); base=`http://127.0.0.1:${server.address().port}`; });
 test.afterEach(async()=>{ await new Promise(r=>server.close(r)); app.close(); });
 
 test('registrasi sales selalu PENDING dan tidak dapat login sebelum approval',async()=>{
@@ -88,6 +88,20 @@ test('hanya admin dapat membaca audit log yang tidak mengandung secret',async()=
  const al=await request(base,'/api/login',{method:'POST',body:JSON.stringify({email:'admin@example.invalid',password:'AdminPassword!123'})});const ac=al.headers.get('set-cookie').split(';')[0];
  const audit=await request(base,'/api/admin/audit',{headers:{cookie:ac}});assert.equal(audit.status,200);assert.ok(audit.body.logs.some(x=>x.action==='LOGIN'));
  const serialized=JSON.stringify(audit.body);assert.equal(serialized.includes('Password'),false);assert.equal(serialized.includes('id_hash'),false);assert.equal(serialized.includes('csrf'),false);
+});
+
+test('vault ASSIST terenkripsi, terisolasi per Sales, dan token tidak keluar API',async()=>{
+ const s1=app.services.users.create({...sales,email:'assist1@example.invalid',phone:'081233333331',salesCode:'AST01',status:'ACTIVE'});
+ const s2=app.services.users.create({...sales,email:'assist2@example.invalid',phone:'081233333332',salesCode:'AST02',status:'ACTIVE'});
+ const secret='synthetic-access-token-never-returned';app.services.assist.store(s1.id,{accessToken:secret,refreshToken:'synthetic-refresh-token',subjectId:'subject-1',displayName:'Sales Assist 1',email:'assist1@example.invalid',expiresAt:'2030-01-01T00:00:00.000Z'});
+ const raw=app.db.prepare('SELECT * FROM assist_connections WHERE user_id=?').get(s1.id);assert.equal(JSON.stringify(raw).includes(secret),false);assert.notEqual(raw.access_ciphertext,secret);
+ const l1=await request(base,'/api/login',{method:'POST',body:JSON.stringify({email:s1.email,password:sales.password})});const c1=l1.headers.get('set-cookie').split(';')[0];
+ const own=await request(base,'/api/assist/connection',{headers:{cookie:c1}});assert.equal(own.status,200);assert.equal(own.body.connection.displayName,'Sales Assist 1');assert.equal(JSON.stringify(own.body).includes(secret),false);
+ const l2=await request(base,'/api/login',{method:'POST',body:JSON.stringify({email:s2.email,password:sales.password})});const c2=l2.headers.get('set-cookie').split(';')[0];
+ const other=await request(base,'/api/assist/connection',{headers:{cookie:c2}});assert.equal(other.status,200);assert.equal(other.body.connection,null);
+ const noCsrf=await request(base,'/api/assist/connection',{method:'DELETE',headers:{cookie:c1},body:'{}'});assert.equal(noCsrf.status,403);
+ const disconnected=await request(base,'/api/assist/connection',{method:'DELETE',headers:{cookie:c1,'x-csrf-token':l1.body.csrfToken},body:'{}'});assert.equal(disconnected.status,200);
+ assert.equal(app.db.prepare('SELECT count(*) n FROM assist_connections WHERE user_id=?').get(s1.id).n,0);
 });
 
 test('login dibatasi setelah percobaan gagal berulang',async()=>{
