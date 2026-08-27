@@ -17,7 +17,11 @@ Website pendamping `@Rd_prospek_bot`. Aplikasi ini **tidak mengimpor, menjalanka
 - SQLite terpisah dengan foreign keys dan WAL.
 - Audit log registrasi, login, approval, reject, dan suspend.
 - Dashboard Sales/Admin responsif.
-- Placeholder aman untuk koneksi ASSIST dan input prospek tahap berikutnya.
+- Input draft prospek LOW/MEDIUM/HOT.
+- Daftar prospek terisolasi per Sales; `owner_id` selalu berasal dari session backend.
+- Sales lain tidak dapat membaca atau mengubah prospek yang bukan miliknya.
+- Rate limiting login: 5 kegagalan per IP+email dalam 15 menit.
+- Placeholder aman untuk koneksi ASSIST tahap berikutnya.
 
 ## Menjalankan lokal
 

@@ -58,6 +58,30 @@ test('mutasi admin melalui GET ditolak dan tidak mengubah akun',async()=>{
  const pending=await request(base,'/api/login',{method:'POST',body:JSON.stringify({email:'victim@example.invalid',password:sales.password})}); assert.equal(pending.status,403);
 });
 
+test('prospek terisolasi per sales dan sales lain tidak dapat mengubahnya',async()=>{
+ const s1=app.services.users.create({...sales,email:'sales1@example.invalid',phone:'081211111111',salesCode:'SALE01',status:'ACTIVE'});
+ const s2=app.services.users.create({...sales,email:'sales2@example.invalid',phone:'081222222222',salesCode:'SALE02',status:'ACTIVE'});
+ const l1=await request(base,'/api/login',{method:'POST',body:JSON.stringify({email:s1.email,password:sales.password})}); const c1=l1.headers.get('set-cookie').split(';')[0];
+ const l2=await request(base,'/api/login',{method:'POST',body:JSON.stringify({email:s2.email,password:sales.password})}); const c2=l2.headers.get('set-cookie').split(';')[0];
+ const made=await request(base,'/api/prospects',{method:'POST',headers:{cookie:c1,'x-csrf-token':l1.body.csrfToken},body:JSON.stringify({customerName:'Customer Sintetis',phone:'081355555555',level:'HOT',motor:'PCX 160',province:'Kalimantan Timur',district:'Penajam Paser Utara',subDistrict:'Penajam',village:'Nenang'})});
+ assert.equal(made.status,201); assert.equal(made.body.prospect.status,'DRAFT');
+ const own=await request(base,'/api/prospects',{headers:{cookie:c1}}); assert.equal(own.body.prospects.length,1);
+ const other=await request(base,'/api/prospects',{headers:{cookie:c2}}); assert.equal(other.body.prospects.length,0);
+ const stolen=await request(base,`/api/prospects/${made.body.prospect.id}`,{method:'PATCH',headers:{cookie:c2,'x-csrf-token':l2.body.csrfToken},body:JSON.stringify({level:'LOW'})}); assert.equal(stolen.status,404);
+});
+
+test('sales tidak dapat membuat prospek tanpa CSRF atau dengan data tidak valid',async()=>{
+ const s=app.services.users.create({...sales,email:'sales3@example.invalid',phone:'081233333333',salesCode:'SALE03',status:'ACTIVE'});
+ const l=await request(base,'/api/login',{method:'POST',body:JSON.stringify({email:s.email,password:sales.password})}); const c=l.headers.get('set-cookie').split(';')[0];
+ const noCsrf=await request(base,'/api/prospects',{method:'POST',headers:{cookie:c},body:JSON.stringify({customerName:'Customer Uji'})}); assert.equal(noCsrf.status,403);
+ const invalid=await request(base,'/api/prospects',{method:'POST',headers:{cookie:c,'x-csrf-token':l.body.csrfToken},body:JSON.stringify({customerName:'X',phone:'abc',level:'SUPER HOT'})}); assert.equal(invalid.status,400);
+});
+
+test('login dibatasi setelah percobaan gagal berulang',async()=>{
+ for(let i=0;i<5;i++){const r=await request(base,'/api/login',{method:'POST',headers:{'x-forwarded-for':'198.51.100.9'},body:JSON.stringify({email:'unknown@example.invalid',password:'WrongPassword!123'})});assert.equal(r.status,401)}
+ const blocked=await request(base,'/api/login',{method:'POST',headers:{'x-forwarded-for':'198.51.100.9'},body:JSON.stringify({email:'unknown@example.invalid',password:'WrongPassword!123'})});assert.equal(blocked.status,429);assert.equal(blocked.body.code,'RATE_LIMITED');
+});
+
 test('logout session aktif memerlukan CSRF dan mencabut session',async()=>{
  const al=await request(base,'/api/login',{method:'POST',body:JSON.stringify({email:'admin@example.invalid',password:'AdminPassword!123'})}); const cookie=al.headers.get('set-cookie').split(';')[0];
  const denied=await request(base,'/api/logout',{method:'POST',headers:{cookie},body:'{}'}); assert.equal(denied.status,403);
