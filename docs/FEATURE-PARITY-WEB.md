@@ -122,7 +122,7 @@ Bot juga menerima dokumen `.xlsx`, `.xls`, `.csv`, `.txt`, serta state text bert
 - Output: old→new; pesan khusus DEAL; retry/error.
 - PATCH portal hanya mengganti level draft LOW/MEDIUM/HOT tanpa hierarchy dan tanpa STAR.
 
-**Status: ❌ parity STAR / 🟡 fungsi lokal yang namanya mirip namun semantiknya berbeda. Kelas MUTATION.**
+**Status: 🟡 safety gate tersedia (preview, idempotency, confirm/cancel, expiry, audit), tetapi eksekusi mutation STAR tetap OFF. Fungsi draft lokal tetap berbeda semantik. Kelas MUTATION.**
 
 ### 4. Aktivitas
 
