@@ -1,0 +1,5 @@
+'use strict';
+const test=require('node:test'),assert=require('node:assert/strict');
+const {parseProspectXlsxRows}=require('../src/prospect-xlsx-parser');
+test('row XLSX diproyeksikan ke validator batch yang sama',()=>{const out=parseProspectXlsxRows([['level','nama','hp','motor','nik','alamat','kecamatan','desa','rt','rw','source','pekerjaan'],['LOW','Ani','081234567890','','','','','','','','1','Wiraswasta']]);assert.equal(out.rows[0].phone,'6281234567890')});
+test('XLSX menolak row cap, formula, sheet kosong dan cell object',()=>{assert.throws(()=>parseProspectXlsxRows([['level','nama','hp'],['LOW','=CMD()','081234567890']]),e=>e.code==='BATCH_XLSX_UNSAFE');assert.throws(()=>parseProspectXlsxRows([]),e=>e.code==='BATCH_HEADERS_INVALID');assert.throws(()=>parseProspectXlsxRows([['level','nama','hp'],['LOW',{},'081234567890']]),e=>e.code==='BATCH_XLSX_UNSAFE');assert.throws(()=>parseProspectXlsxRows([['level','nama','hp'],['LOW','A','081234567890'],['LOW','B','081234567891']],{maxRows:1}),e=>e.code==='BATCH_ROW_LIMIT')});

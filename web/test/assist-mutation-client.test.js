@@ -8,6 +8,12 @@ test('update status mengirim kontrak STAR yang tepat dan memproyeksikan hasil',a
  assert.deepEqual(result,{id:'p1',status:'DEAL'});assert.equal(calls.length,1);assert.deepEqual(calls[0].variables,{data:{customerProspectId:'p1',prospectStatus:'DEAL',reasonNotDeal:'Update via Portal'}});assert.match(calls[0].query,/ensureUpdateCustomerProspectStatusFromCustomers/);assert.equal(JSON.stringify(result).includes('secret-token'),false)
 });
 
+test('create prospek mengirim kontrak STAR authoritative dan memproyeksikan hasil',async()=>{
+ const calls=[],client=createAssistMutationClient({transport:async x=>{calls.push(x);return{data:{ensureCreateCustomerProspectFromCustomers:{id:'new-p1',prospectNumber:'H704-PRS-9',created:'2026-08-28T00:00:00Z',prospectStatus:'PROSPECT'}}}}});
+ const input={name:'Customer Baru',mobilePhoneNumber:'628123456789',customerType:'REGULAR',gender:'LAKI_LAKI',testRidePreference:false,tagPriority:true,preferenceSalesType:'CREDIT',prospectStatus:'PROSPECT',channelId:'channel-1',channelName:'ASTRA MOTOR PENAJAM',occupation:'Wiraswasta',religion:'ISLAM',sourceOfProspectHsoId:'source-1'};
+ const result=await client.createProspect('secret-token',input);assert.deepEqual(result,{id:'new-p1',prospectNumber:'H704-PRS-9',created:'2026-08-28T00:00:00Z',status:'PROSPECT'});assert.equal(calls.length,1);assert.deepEqual(calls[0].variables,{data:input});assert.match(calls[0].query,/ensureCreateCustomerProspectFromCustomers/);assert.equal(JSON.stringify(result).includes('secret-token'),false)
+});
+
 test('mutation client menolak input, schema abnormal, dan GraphQL error dengan aman',async()=>{
  const client=createAssistMutationClient({transport:async()=>({data:{ensureUpdateCustomerProspectStatusFromCustomers:{id:'p1'}}})});
  await assert.rejects(()=>client.updateProspectStatus('',{prospectId:'p1',toStatus:'DEAL',reason:'abc'}),e=>e.code==='ASSIST_REAUTH_REQUIRED');
