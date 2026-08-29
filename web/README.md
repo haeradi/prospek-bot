@@ -21,7 +21,7 @@ Website pendamping `@Rd_prospek_bot`. Aplikasi ini **tidak mengimpor, menjalanka
 - Daftar prospek terisolasi per Sales; `owner_id` selalu berasal dari session backend.
 - Sales lain tidak dapat membaca atau mengubah prospek yang bukan miliknya.
 - Rate limiting login: 5 kegagalan per IP+email dalam 15 menit.
-- Placeholder aman untuk koneksi ASSIST tahap berikutnya.
+- Vault token ASSIST terenkripsi per Sales, read model tenant-safe, activity, follow-up, batch draft, Bulk Not Deal, dan submit draft→STAR melalui preview/confirm persisten.
 
 ## Menjalankan lokal
 
@@ -46,6 +46,8 @@ Environment produksi wajib:
 - `PORT` opsional, default `3210`
 - `ASSIST_MASTER_KEY` wajib sebelum koneksi ASSIST diaktifkan; base64 dari 32 byte acak, disimpan hanya di environment produksi permission `0600`
 - `ASSIST_CHROMIUM_PATH` menunjuk binary Chromium khusus portal; browser context baru dibuat per login dan selalu ditutup setelah sukses, gagal, atau timeout
+- `ASSIST_MUTATION_ENABLED=false|true` untuk executor status lama.
+- `ASSIST_PARITY_MUTATION_ENABLED=false|true`; default dan nilai wajib saat rollout awal adalah `false`.
 
 Publikasikan melalui reverse proxy/Cloudflare Tunnel ke `127.0.0.1:3210`. Jangan membuka port aplikasi langsung ke internet.
 
@@ -53,9 +55,9 @@ Deployment produksi menggunakan user Linux dan service terpisah dari bot. Templa
 
 URL produksi Astra Motor Penajam: `https://prospek.radi.biz.id`.
 
-## Batas fase ini
+## Mutation safety
 
-Mutasi ASSIST, login Microsoft MFA, dan upload Excel belum diaktifkan. UI menandainya dengan jelas. Tahap berikutnya akan mengekstrak ASSIST client menjadi modul bersama tanpa menghentikan bot Telegram.
+Mutation parity tersedia tetapi default OFF. Preview/read/cancel tetap dapat digunakan saat OFF. Confirm create/follow-up/Bulk hanya boleh diaktifkan setelah artifact immutable lulus test, audit, migration smoke, dan independent review. Outcome POST ambigu menjadi `UNKNOWN` dan tidak pernah blind retry.
 
 ## Tests
 
@@ -75,8 +77,8 @@ Menguji:
 
 ## Security notes
 
-- Tidak ada dependency runtime eksternal pada fase ini.
+- Dependency runtime dikunci melalui `package-lock.json`; `.xlsx` dibaca dengan `read-excel-file`.
 - `npm audit`: 0 vulnerability.
 - Content Security Policy, frame denial, MIME sniffing protection, dan referrer policy aktif.
 - Database, `.env`, dan log diabaikan Git.
-- Token ASSIST tidak disimpan atau ditampilkan pada fase ini.
+- Token ASSIST disimpan terenkripsi per Sales, didekripsi hanya dalam memori server, dan tidak dikirim ke browser/log/audit/operation row.

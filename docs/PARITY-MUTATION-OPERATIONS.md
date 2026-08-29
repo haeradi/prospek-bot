@@ -52,6 +52,52 @@
 8. Uji mutation hanya dengan prospek uji/intent Sales sah. Jangan membuat mutation pelanggan nyata otomatis.
 9. Verifikasi public HTTPS, state terminal, audit, SQLite integrity, restart count, dan bot Telegram tidak berubah.
 
+### Perintah deployment exact
+
+Jalankan dari checkout immutable yang sudah direview. Ganti `<SHA>` hanya dengan commit berstatus PASS.
+
+```bash
+set -euo pipefail
+SHA='<SHA>'
+STAMP="$(date -u +%Y%m%d-%H%M%S)"
+BACKUP=/var/backups/prospek-web
+install -d -m 0700 "$BACKUP"
+
+# Backup artifact dan SQLite secara konsisten, termasuk checkpoint WAL.
+tar -C /opt -czf "$BACKUP/app-$STAMP.tgz" prospek-web
+sqlite3 /var/lib/prospek-web/data/portal.db 'PRAGMA wal_checkpoint(FULL); PRAGMA integrity_check;'
+sqlite3 /var/lib/prospek-web/data/portal.db ".backup '$BACKUP/portal-$STAMP.db'"
+sha256sum "$BACKUP/app-$STAMP.tgz" "$BACKUP/portal-$STAMP.db"
+
+# Pastikan tidak ada pekerjaan aktif/tidak dikenal sebelum install.
+sqlite3 -header -column /var/lib/prospek-web/data/portal.db "
+SELECT 'submit' kind,id,status FROM prospect_submit_operations WHERE status IN ('CONFIRMED','RUNNING','CREATED','PARTIAL','RECOVERING')
+UNION ALL SELECT 'followup',id,status FROM followup_operations WHERE status IN ('CONFIRMED','RUNNING')
+UNION ALL SELECT 'bulk',id,status FROM bulk_not_deal_operations WHERE status IN ('CONFIRMED','RUNNING');"
+
+# Assemble artifact exact, dependencies lockfile, dan runtime assets.
+rm -rf /opt/prospek-web.new
+git worktree add --detach /opt/prospek-web.new "$SHA"
+(cd /opt/prospek-web.new/web && npm ci --omit=dev)
+test -f /opt/prospek-web.new/web/data/master-data.json
+chown -R prospekweb:prospekweb /opt/prospek-web.new
+
+# Switch harus OFF pada first restart.
+grep -q '^ASSIST_PARITY_MUTATION_ENABLED=false$' /etc/prospek-web.env
+mv /opt/prospek-web /opt/prospek-web.previous
+mv /opt/prospek-web.new /opt/prospek-web
+systemctl restart prospek-web.service
+
+# Bounded readiness dan verifikasi.
+for i in $(seq 1 30); do curl -fsS http://127.0.0.1:3210/health && break; sleep 1; done
+curl -fsS https://prospek.radi.biz.id/ >/dev/null
+sqlite3 /var/lib/prospek-web/data/portal.db 'PRAGMA integrity_check;'
+systemctl show prospek-web.service -p ActiveState -p SubState -p NRestarts
+journalctl -u prospek-web.service --since '-5 minutes' --no-pager
+```
+
+Stop timeout unit harus lebih besar dari drain aplikasi 45 detik, misalnya `TimeoutStopSec=60s`.
+
 ## Rollback
 
 1. Set `ASSIST_PARITY_MUTATION_ENABLED=false` lebih dulu.
@@ -59,6 +105,31 @@
 3. Jika code rollback dibutuhkan, restore artifact immutable sebelumnya; jangan downgrade DB tanpa migration teruji.
 4. Operasi `RUNNING` pasca-crash harus diperlakukan `UNKNOWN`, bukan direplay.
 5. Rekonsiliasi STAR berdasarkan owner dan nomor HP sebelum tindakan manual.
+
+Backup predeploy yang sudah tersedia saat runbook ini ditulis:
+
+- `/var/backups/prospek-web/app-20260829-070457.tgz`
+- `/var/backups/prospek-web/portal-20260829-070457.db`
+
+Rollback code tanpa downgrade DB:
+
+```bash
+sed -i 's/^ASSIST_PARITY_MUTATION_ENABLED=.*/ASSIST_PARITY_MUTATION_ENABLED=false/' /etc/prospek-web.env
+systemctl stop prospek-web.service
+mv /opt/prospek-web "/opt/prospek-web.failed-$(date -u +%Y%m%d-%H%M%S)"
+tar -C /opt -xzf /var/backups/prospek-web/app-20260829-070457.tgz
+systemctl start prospek-web.service
+curl -fsS http://127.0.0.1:3210/health
+```
+
+Restore DB hanya jika rollback compatibility sudah diuji dan operator menerima kehilangan perubahan setelah backup:
+
+```bash
+systemctl stop prospek-web.service
+install -o prospekweb -g prospekweb -m 0600 /var/backups/prospek-web/portal-20260829-070457.db /var/lib/prospek-web/data/portal.db
+rm -f /var/lib/prospek-web/data/portal.db-wal /var/lib/prospek-web/data/portal.db-shm
+systemctl start prospek-web.service
+```
 
 ## Larangan
 
