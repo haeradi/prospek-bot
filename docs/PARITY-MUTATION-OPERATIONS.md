@@ -68,6 +68,8 @@ tar -C /opt -czf "$BACKUP/app-$STAMP.tgz" prospek-web
 sqlite3 /var/lib/prospek-web/data/portal.db 'PRAGMA wal_checkpoint(FULL); PRAGMA integrity_check;'
 sqlite3 /var/lib/prospek-web/data/portal.db ".backup '$BACKUP/portal-$STAMP.db'"
 sha256sum "$BACKUP/app-$STAMP.tgz" "$BACKUP/portal-$STAMP.db"
+printf '%s\n' "$STAMP" > "$BACKUP/LATEST.tmp"
+mv "$BACKUP/LATEST.tmp" "$BACKUP/LATEST"
 
 # Pastikan tidak ada pekerjaan aktif/tidak dikenal sebelum install.
 sqlite3 -header -column /var/lib/prospek-web/data/portal.db "
@@ -89,7 +91,12 @@ mv /opt/prospek-web.new /opt/prospek-web
 systemctl restart prospek-web.service
 
 # Bounded readiness dan verifikasi.
-for i in $(seq 1 30); do curl -fsS http://127.0.0.1:3210/health && break; sleep 1; done
+ready=false
+for i in $(seq 1 30); do
+  if curl -fsS http://127.0.0.1:3210/health; then ready=true; break; fi
+  sleep 1
+done
+test "$ready" = true
 curl -fsS https://prospek.radi.biz.id/ >/dev/null
 sqlite3 /var/lib/prospek-web/data/portal.db 'PRAGMA integrity_check;'
 systemctl show prospek-web.service -p ActiveState -p SubState -p NRestarts
@@ -106,18 +113,20 @@ Stop timeout unit harus lebih besar dari drain aplikasi 45 detik, misalnya `Time
 4. Operasi `RUNNING` pasca-crash harus diperlakukan `UNKNOWN`, bukan direplay.
 5. Rekonsiliasi STAR berdasarkan owner dan nomor HP sebelum tindakan manual.
 
-Backup predeploy yang sudah tersedia saat runbook ini ditulis:
-
-- `/var/backups/prospek-web/app-20260829-070457.tgz`
-- `/var/backups/prospek-web/portal-20260829-070457.db`
+Setiap deployment menulis timestamp backup yang baru selesai ke
+`/var/backups/prospek-web/LATEST`. Rollback wajib membaca manifest tersebut,
+bukan memilih timestamp secara manual.
 
 Rollback code tanpa downgrade DB:
 
 ```bash
 sed -i 's/^ASSIST_PARITY_MUTATION_ENABLED=.*/ASSIST_PARITY_MUTATION_ENABLED=false/' /etc/prospek-web.env
+STAMP="$(cat /var/backups/prospek-web/LATEST)"
+test -n "$STAMP"
+test -f "/var/backups/prospek-web/app-$STAMP.tgz"
 systemctl stop prospek-web.service
 mv /opt/prospek-web "/opt/prospek-web.failed-$(date -u +%Y%m%d-%H%M%S)"
-tar -C /opt -xzf /var/backups/prospek-web/app-20260829-070457.tgz
+tar -C /opt -xzf "/var/backups/prospek-web/app-$STAMP.tgz"
 systemctl start prospek-web.service
 curl -fsS http://127.0.0.1:3210/health
 ```
@@ -126,7 +135,9 @@ Restore DB hanya jika rollback compatibility sudah diuji dan operator menerima k
 
 ```bash
 systemctl stop prospek-web.service
-install -o prospekweb -g prospekweb -m 0600 /var/backups/prospek-web/portal-20260829-070457.db /var/lib/prospek-web/data/portal.db
+STAMP="$(cat /var/backups/prospek-web/LATEST)"
+test -f "/var/backups/prospek-web/portal-$STAMP.db"
+install -o prospekweb -g prospekweb -m 0600 "/var/backups/prospek-web/portal-$STAMP.db" /var/lib/prospek-web/data/portal.db
 rm -f /var/lib/prospek-web/data/portal.db-wal /var/lib/prospek-web/data/portal.db-shm
 systemctl start prospek-web.service
 ```
