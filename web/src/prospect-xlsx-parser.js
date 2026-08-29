@@ -1,24 +1,13 @@
 'use strict';
+const {unzipSync,strFromU8}=require('fflate');
 const {parseProspectBatch}=require('./prospect-batch-parser');
 const fail=(code,details={})=>{throw Object.assign(new Error(code),{code,status:400,...details})};
-function quote(x){const s=String(x??'');return `"${s.replaceAll('"','""')}"`}
-function parseProspectXlsxRows(rows,{maxRows=500}={}){
- if(!Array.isArray(rows)||!rows.length)fail('BATCH_HEADERS_INVALID');
- if(rows.length-1>maxRows)fail('BATCH_ROW_LIMIT');
- const safeRows=rows.map((row,rowIndex)=>{
-  if(!Array.isArray(row))fail('BATCH_XLSX_UNSAFE',{row:rowIndex+1,column:1});
-  return row.map((cell,columnIndex)=>{
-   if(cell!=null&&!['string','number','boolean'].includes(typeof cell))fail('BATCH_XLSX_UNSAFE',{row:rowIndex+1,column:columnIndex+1});
-   if(typeof cell==='string'){
-    const value=cell.trim();
-    if(value==='-')return '';
-    if(/^[=+@]/.test(value)||/^-[A-Za-z(]/.test(value))fail('BATCH_XLSX_UNSAFE',{row:rowIndex+1,column:columnIndex+1});
-   }
-   return cell;
-  });
- });
- const csv=safeRows.map(row=>row.map(quote).join(',')).join('\n');
- return parseProspectBatch(Buffer.from(csv),{format:'csv',maxRows});
-}
-async function parseProspectXlsx(buffer,{maxBytes=1024*1024,maxRows=500}={}){if(!Buffer.isBuffer(buffer)||buffer.length>maxBytes)fail('BATCH_TOO_LARGE');let read;try{read=require('read-excel-file/node')}catch{fail('BATCH_XLSX_UNAVAILABLE')}let rows;try{rows=await read(buffer,{sheet:1})}catch{fail('BATCH_XLSX_INVALID')}return parseProspectXlsxRows(rows,{maxRows})}
-module.exports={parseProspectXlsxRows,parseProspectXlsx};
+const norm=x=>String(x??'').trim().toLowerCase().replace(/\s+/g,'');
+function quote(x){const s=String(x??'');return /[",\n\r]/.test(s)?`"${s.replace(/"/g,'""')}"`:s}
+function cellRef(ref){const m=/^([A-Z]+)(\d+)$/.exec(ref||'');if(!m)return{};let column=0;for(const c of m[1])column=column*26+c.charCodeAt(0)-64;return{row:Number(m[2]),column}}
+function rejectWorkbookFormulas(buffer){let files;try{files=unzipSync(buffer)}catch{fail('BATCH_XLSX_INVALID')}for(const [name,data] of Object.entries(files)){if(!/^xl\/worksheets\/sheet\d+\.xml$/.test(name))continue;const xml=strFromU8(data);const cells=xml.matchAll(/<c\b[^>]*\br="([A-Z]+\d+)"[^>]*>[\s\S]*?<\/c>/g);for(const match of cells)if(/<f(?:\s|>)/.test(match[0]))fail('BATCH_XLSX_UNSAFE',cellRef(match[1]))}}
+function scalar(cell,row,column){if(cell==null)return'';if(['string','number','boolean'].includes(typeof cell)){const value=String(cell).trim();if(value==='-')return'';if(/^[=+@]/.test(value))fail('BATCH_XLSX_UNSAFE',{row,column});return value}if(cell instanceof Date&&!Number.isNaN(cell.valueOf()))return cell.toISOString();fail('BATCH_XLSX_UNSAFE',{row,column})}
+function parseBotRows(rows,{maxRows}){const headers=rows[0].map(norm),idx=name=>headers.indexOf(norm(name)),map={jenis:idx('Jenis Sales'),nama:idx('Nama'),hp:idx('Nomor HP'),alamat:idx('Alamat'),kecamatan:idx('Kecamatan'),desa:idx('Kelurahan'),rt:idx('RT'),rw:idx('RW'),motor:idx('tipe motor'),nik:Math.max(idx('NIK'),idx('Nomor NIK')),source:idx('kode asal prospek'),pekerjaan:idx('Pekerjaan')};if(map.jenis<0||map.nama<0||map.hp<0)return null;const level=map.nik>=0?'HOT':[map.alamat,map.kecamatan,map.motor].some(x=>x>=0)?'MEDIUM':'LOW',simple=[['level','nama','hp','motor','nik','alamat','kecamatan','desa','rt','rw','source','pekerjaan']];for(let r=1;r<rows.length;r++){const get=k=>map[k]>=0?scalar(rows[r]?.[map[k]],r+1,map[k]+1):'';if(norm(get('jenis'))!=='individu')continue;simple.push([level,get('nama'),get('hp'),get('motor'),get('nik'),get('alamat'),get('kecamatan'),get('desa'),get('rt'),get('rw'),get('source'),get('pekerjaan')])}return parseProspectBatch(Buffer.from(simple.map(x=>x.map(quote).join(',')).join('\n')),{format:'csv',maxRows})}
+function parseProspectXlsxRows(rows,{maxRows=500}={}){if(!Array.isArray(rows)||!rows.length)fail('BATCH_HEADERS_INVALID');if(rows.length-1>maxRows)fail('BATCH_ROW_LIMIT');const bot=parseBotRows(rows,{maxRows});if(bot)return bot;const safeRows=rows.map((row,r)=>{if(!Array.isArray(row))fail('BATCH_XLSX_UNSAFE',{row:r+1,column:1});return row.map((cell,c)=>scalar(cell,r+1,c+1))});return parseProspectBatch(Buffer.from(safeRows.map(row=>row.map(quote).join(',')).join('\n')),{format:'csv',maxRows})}
+async function parseProspectXlsx(buffer,{maxBytes=1024*1024,maxRows=500}={}){if(!Buffer.isBuffer(buffer)||buffer.length>maxBytes)fail('BATCH_TOO_LARGE');rejectWorkbookFormulas(buffer);let read;try{read=require('read-excel-file/node')}catch{fail('BATCH_XLSX_UNAVAILABLE')}let rows;try{rows=await read(buffer,{sheet:1})}catch{fail('BATCH_XLSX_INVALID')}return parseProspectXlsxRows(rows,{maxRows})}
+module.exports={parseProspectXlsxRows,parseProspectXlsx,rejectWorkbookFormulas};
