@@ -81,6 +81,8 @@ UNION ALL SELECT 'bulk',id,status FROM bulk_not_deal_operations WHERE status IN 
 rm -rf /opt/prospek-web.new
 git worktree add --detach /opt/prospek-web.new "$SHA"
 (cd /opt/prospek-web.new/web && npm ci --omit=dev)
+# Runtime data tidak berasal dari Git dan tidak boleh disalin ke artifact.
+ln -s /var/lib/prospek-web/data /opt/prospek-web.new/web/data
 test -f /opt/prospek-web.new/web/data/master-data.json
 chown -R prospekweb:prospekweb /opt/prospek-web.new
 
