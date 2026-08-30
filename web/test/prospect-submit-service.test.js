@@ -27,7 +27,7 @@ test('migrasi duplicate legacy mengarsipkan konflik sebelum unique index',()=>{c
 
 test('payload pakai source eksplisit serta channel id dan nama dari JWT',async()=>{const x=fixture(),op=await x.service.preview('u1','p1','claims-key');await x.service.confirm('u1',op.id);const body=x.calls[0][1];assert.equal(body.sourceOfProspectHsoId,'4cd4a103-4aa6-4d48-88e1-7bba6cb95d77');assert.equal(body.channelId,'channel-jwt');assert.equal(body.channelName,'ASTRA MOTOR PENAJAM')});
 
-test('JWT tanpa nama channel ditolak fail closed sebelum preview',()=>{const x=fixture({claims:{roles:JSON.stringify([{ConnectionType:'BusinessArea',ConnectionId:'channel-jwt'}])}});assert.throws(()=>x.service.preview('u1','p1','bad-claims-key'),e=>e.code==='ASSIST_REAUTH_REQUIRED')});
+test('JWT production tanpa nama channel memakai nama dealer authoritative seperti bot',()=>{const x=fixture({claims:{roles:JSON.stringify([{ConnectionType:'BusinessArea',ConnectionId:'channel-jwt',Id:'role-id'}])}}),op=x.service.preview('u1','p1','production-claims-key'),body=JSON.parse(x.db.prepare('SELECT payload_json FROM prospect_submit_operations WHERE id=?').get(op.id).payload_json);assert.equal(body.channelId,'channel-jwt');assert.equal(body.channelName,'ASTRA MOTOR PENAJAM')});
 
 test('telepon Indonesia invalid ditolak dan tidak false duplicate',()=>{const x=fixture();x.db.prepare("UPDATE prospects SET phone='00123' WHERE id='p1'").run();assert.throws(()=>x.service.preview('u1','p1','bad-phone-key'),e=>e.code==='PHONE_INVALID')});
 
