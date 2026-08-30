@@ -119,6 +119,14 @@ test('hanya admin dapat membaca audit log yang tidak mengandung secret',async()=
  const serialized=JSON.stringify(audit.body);assert.equal(serialized.includes('Password'),false);assert.equal(serialized.includes('id_hash'),false);assert.equal(serialized.includes('csrf'),false);
 });
 
+test('koneksi ASSIST kedaluwarsa dilaporkan REAUTH_REQUIRED agar UI menawarkan login ulang',async()=>{
+ const u=app.services.users.create({...sales,email:'expired@example.invalid',phone:'081233333339',salesCode:'EXP01',status:'ACTIVE'});
+ app.services.assist.store(u.id,{accessToken:'expired-access-token',refreshToken:'expired-refresh-token',expiresAt:'2020-01-01T00:00:00.000Z'});
+ const login=await request(base,'/api/login',{method:'POST',body:JSON.stringify({email:u.email,password:sales.password})}),cookie=login.headers.get('set-cookie').split(';')[0];
+ const own=await request(base,'/api/assist/connection',{headers:{cookie}});
+ assert.equal(own.status,200);assert.equal(own.body.connection.status,'REAUTH_REQUIRED');
+});
+
 test('vault ASSIST terenkripsi, terisolasi per Sales, dan token tidak keluar API',async()=>{
  const s1=app.services.users.create({...sales,email:'assist1@example.invalid',phone:'081233333331',salesCode:'AST01',status:'ACTIVE'});
  const s2=app.services.users.create({...sales,email:'assist2@example.invalid',phone:'081233333332',salesCode:'AST02',status:'ACTIVE'});
