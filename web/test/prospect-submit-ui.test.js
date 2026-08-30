@@ -31,6 +31,8 @@ test('STAR status copy warns against blind create retry and renders remote numbe
 test('semua kesalahan format Excel menampilkan notifikasi template yang jelas', () => {
   for (const code of ['BATCH_ROWS_INVALID','BATCH_HEADERS_INVALID','BATCH_ROW_LIMIT','BATCH_FORMAT_INVALID','BATCH_ENCODING_INVALID','BATCH_XLSX_INVALID']) assert.match(source, new RegExp(code));
   assert.match(source, /Isi Excel tidak sesuai format template/);
-  assert.match(source, /nama kolom, level, HP, NIK, dan data wajib/);
+  assert.match(source, /Baris \$\{first\.row\}/);
+  assert.match(source, /REQUIRED_FOR_MEDIUM_HOT/);
+  assert.match(source, /NIK_16_DIGITS/);
   assert.match(source, /baris \$\{loc\.row\}, kolom \$\{loc\.column\}/);
 });
