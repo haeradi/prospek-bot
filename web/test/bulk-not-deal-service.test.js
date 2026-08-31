@@ -2,13 +2,15 @@
 const test=require('node:test'),assert=require('node:assert/strict');
 const {DatabaseSync}=require('node:sqlite');
 const {installBulkNotDealService}=require('../src/bulk-not-deal-service');
+const ELIGIBLE_TEST=new Set(['PROSPECT','LOW','MEDIUM','HOT','HOT_PROSPECT']);
 
-function fixture({prospects,update,tokenFor,now='2026-08-29T00:00:00.000Z'}={}){
+function fixture({prospects,update,tokenFor,delayMs=async()=>{},now='2026-08-29T00:00:00.000Z'}={}){
  const db=new DatabaseSync(':memory:');db.exec('CREATE TABLE users(id TEXT PRIMARY KEY,role TEXT,status TEXT);');
  db.prepare('INSERT INTO users VALUES(?,?,?)').run('s1','SALES','ACTIVE');db.prepare('INSERT INTO users VALUES(?,?,?)').run('s2','SALES','ACTIVE');db.prepare('INSERT INTO users VALUES(?,?,?)').run('admin','ADMIN','ACTIVE');
  let rows=prospects||[{id:'p1',status:'HOT',createdAt:'2026-07-01T00:00:00Z'},{id:'p2',status:'DEAL',createdAt:'2026-07-01T00:00:00Z'},{id:'p3',status:'LOW',createdAt:'2026-08-20T00:00:00Z'}],calls=[];
- const service=installBulkNotDealService({db,tokenFor:tokenFor|| (id=>`token-${id}`),readClient:{listProspects:async()=>rows},mutationClient:{updateProspectStatus:update|| (async(t,p)=>{calls.push({t,p});return{id:p.prospectId,status:'LOST'}})},now:()=>now});
- return{db,service,calls,setRows:x=>rows=x};
+ const readCalls=[];const readClient={listProspects:async()=>{throw new Error('listProspects must never be called')},listProspectsForNotDeal:async(_t,opts)=>{readCalls.push(['list',opts]);const cutoff=Date.parse(opts.cutoffDate),lower=opts.maxAgeDays===undefined?-Infinity:cutoff-opts.maxAgeDays*86400000;return rows.filter(x=>ELIGIBLE_TEST.has(x.status)&&Date.parse(x.createdAt)<=cutoff&&Date.parse(x.createdAt)>=lower).slice(0,opts.maxItems)},findProspectById:async(_t,id,opts)=>{readCalls.push(['find',id,opts]);return rows.find(x=>String(x.id)===id)||null}};
+ const service=installBulkNotDealService({db,tokenFor:tokenFor|| (id=>`token-${id}`),readClient,mutationClient:{updateProspectStatus:update|| (async(t,p)=>{calls.push({t,p});return{id:p.prospectId,status:'LOST'}})},delayMs,now:()=>now});
+ return{db,service,calls,readCalls,setRows:x=>rows=x};
 }
 
 test('preview menyimpan snapshot authoritative eligible menurut cutoff dan melarang IDs client',async()=>{
@@ -29,6 +31,10 @@ test('maxAgeDays membatasi batas bawah dan preview maksimum 100',async()=>{
 test('confirm claim atomik, re-read, revalidasi user/token, satu POST per item dengan alasan portal',async()=>{
  let tokenCalls=0;const x=fixture({prospects:[{id:'p1',status:'HOT',createdAt:'2026-07-01T00:00:00Z'},{id:'p2',status:'LOW',createdAt:'2026-07-02T00:00:00Z'}],tokenFor:id=>{tokenCalls++;return `${id}-${tokenCalls}`}});const p=await x.service.preview('s1',{cutoffDate:'2026-08-01T00:00:00Z'},'bulk-run-01');
  const [a,b]=await Promise.all([x.service.confirm('s1',p.id,{concurrency:3}),x.service.confirm('s1',p.id,{concurrency:3})]);assert.equal(a.status,'SUCCEEDED');assert.equal(b.status,'SUCCEEDED');assert.equal(x.calls.length,2);assert.ok(tokenCalls>=5);for(const c of x.calls)assert.deepEqual(c.p,{prospectId:c.p.prospectId,toStatus:'LOST',reason:'Ada keperluan lain'});
+});
+
+test('bulk sequential memberi jeda 30 detik hanya antar mutation',async()=>{
+ const sleeps=[];const x=fixture({prospects:[1,2,3].map(i=>({id:`p${i}`,status:'HOT',createdAt:'2026-07-01T00:00:00Z'})),delayMs:async(ms)=>sleeps.push(ms)});const p=await x.service.preview('s1',{cutoffDate:'2026-08-01T00:00:00Z'},'bulk-delay');const r=await x.service.confirm('s1',p.id);assert.equal(r.status,'SUCCEEDED');assert.equal(x.calls.length,3);assert.deepEqual(sleeps,[30000,30000]);
 });
 
 test('missing dan status LOST/DEAL menjadi STALE tanpa POST',async()=>{
