@@ -15,7 +15,7 @@ function fixture({prospects,update,tokenFor,delayMs=async()=>{},now='2026-08-29T
 
 test('preview menyimpan snapshot authoritative eligible menurut cutoff dan melarang IDs client',async()=>{
  const x=fixture();const a=await x.service.preview('s1',{cutoffDate:'2026-08-01T00:00:00Z'},'bulk-key-001');
- assert.equal(a.status,'PREVIEW');assert.equal(a.total,1);assert.equal(a.items.length,1);assert.match(a.items[0].itemId,/^[0-9a-f-]{36}$/);assert.deepEqual({...a.items[0],itemId:undefined},{itemId:undefined,prospectNumber:'H704-PRS-1',name:'Budi Santoso',fromStatus:'HOT',status:'PENDING'});assert.deepEqual(x.db.prepare('SELECT target_id,from_status FROM bulk_not_deal_items').all().map(r=>({...r})),[{target_id:'p1',from_status:'HOT'}]);assert.equal(x.calls.length,0);
+ assert.equal(a.status,'PREVIEW');assert.equal(a.total,1);assert.equal(a.items.length,1);assert.match(a.items[0].itemId,/^[0-9a-f-]{36}$/);assert.deepEqual({...a.items[0],itemId:undefined},{itemId:undefined,prospectNumber:'H704-PRS-1',name:'Budi Santoso',fromStatus:'HOT',nextFollowUpAt:'2026-07-01T00:00:00Z',status:'PENDING'});assert.deepEqual(x.db.prepare('SELECT target_id,from_status FROM bulk_not_deal_items').all().map(r=>({...r})),[{target_id:'p1',from_status:'HOT'}]);assert.equal(x.calls.length,0);
  const same=await x.service.preview('s1',{cutoffDate:'2026-08-01T00:00:00Z'},'bulk-key-001');assert.equal(same.id,a.id);
  await assert.rejects(()=>x.service.preview('s1',{cutoffDate:'2026-08-02T00:00:00Z'},'bulk-key-001'),e=>e.code==='IDEMPOTENCY_CONFLICT');
  await assert.rejects(()=>x.service.preview('s1',{cutoffDate:'2026-08-01T00:00:00Z',ids:['p2']},'bulk-key-002'),e=>e.code==='TARGET_IDS_FORBIDDEN');
