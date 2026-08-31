@@ -6,6 +6,13 @@ test('Bulk Not Deal bot mempertahankan snapshot nama sampai konfirmasi',()=>{
  assert.match(source, /const NOTDEAL_REASON_ID = 'Ada keperluan lain';/);
  assert.doesNotMatch(source, /convSet\(chatId, \{ \.\.\.s, step: 'notdeal_confirm' \}\);/);
 });
+test('Bulk Not Deal memakai snapshot aman maksimum 200, bukan re-fetch cursor saat mutation',()=>{
+ const execute=source.slice(source.indexOf("if (data === 'notdeal:do')"),source.indexOf('conv.delete(chatId)',source.indexOf("if (data === 'notdeal:do')")));
+ assert.match(source, /const NOTDEAL_MAX_ITEMS = 200;/);
+ assert.match(source, /_ndItems: allItems/);
+ assert.match(execute, /const snapshotItems = Array\.isArray\(s\._ndItems\)/);
+ assert.doesNotMatch(execute, /getCustomerProspectFromCustomers\(first: 10/);
+});
 test('callback Telegram kedaluwarsa tidak menjatuhkan bot',()=>{
  assert.match(source, /answerCallbackQuery\(q\.id\)\.catch/);
 });
