@@ -7,6 +7,7 @@ const SA = require('./star-activity'); // activities + clock-in/out from Star AP
 const XLSX = require('xlsx');
 const { getOccupationHso } = require('./occupation-map');
 const { getMotorList, validateMotorCode } = require('./motor-map');
+const { resolveRegion } = require('./region-resolver');
 const VAULT = require('./vault-manager');
 
 // ====== CONFIG ======
@@ -29,6 +30,18 @@ function decodeJwtUuid(token) {
 // Re-reads jwt each call so it stays correct after account switch (/use, accounts:use)
 function currentJwtUuid() {
   return decodeJwtUuid(jwt) || '';
+}
+
+// Periode bulan berjalan dalam zona bisnis WITA (UTC+8), dipakai Bulk Not Deal.
+// End memakai waktu saat ini agar tidak memasukkan tanggal masa depan.
+function currentWitaMonthRange(now = new Date()) {
+  const shifted = new Date(now.getTime() + 8 * 60 * 60 * 1000);
+  const year = shifted.getUTCFullYear();
+  const month = String(shifted.getUTCMonth() + 1).padStart(2, '0');
+  return {
+    gte: `${year}-${month}-01T00:00:00+08:00`,
+    lte: now.toISOString(),
+  };
 }
 
 // ====== HUMAN DELAY — zigzag random 1-5 menit seperti input manual ======
@@ -204,20 +217,13 @@ const WILAYAH_DEFAULT = {
   villageName: 'SEPAKU',
 };
 // Helper: resolve wilayah dari nama kecamatan + desa (dari Excel/input)
-function resolveWilayah(kecamatanName, desaName) {
-  const sub = SUBDISTRICT_MAP[kecamatanName] || SUBDISTRICT_MAP['SEPAKU'];
-  const vil = VILLAGE_MAP[desaName] || VILLAGE_MAP['SEPAKU'] || { id: WILAYAH_DEFAULT.villageId, name: WILAYAH_DEFAULT.villageName };
-  return {
-    provinceId: WILAYAH_DEFAULT.provinceId,
-    provinceName: WILAYAH_DEFAULT.provinceName,
-    districtId: WILAYAH_DEFAULT.districtId,
-    districtName: WILAYAH_DEFAULT.districtName,
-    subDistrictId: sub.id,
-    subDistrictName: sub.name,
-    villageId: vil.id,
-    villageName: vil.name,
-    postalCode: WILAYAH_DEFAULT.postalCode,
-  };
+function resolveWilayah(kecamatanName, desaName, provinsiName = 'KALIMANTAN TIMUR', kabupatenName = 'PENAJAM PASER UTARA') {
+  return resolveRegion({
+    province: provinsiName || 'KALIMANTAN TIMUR',
+    district: kabupatenName || 'PENAJAM PASER UTARA',
+    subDistrict: kecamatanName,
+    village: desaName,
+  });
 }
 
 // ====== FOLLOW-UP MUTATION ======
@@ -486,6 +492,7 @@ const confirmBtn = () => ({ reply_markup: { inline_keyboard: [[{ text: '✅ Kiri
 // `description` di mutation ensureCreateFollowUpProspectFromCustomers = String
 // (bukan UUID) — kirim display string persis.
 const NOTDEAL_REASON = 'Ada keperluan lain';
+const NOTDEAL_REASON_ID = 'b7b0c814-ef70-4068-b26f-abf73b03ec0b';
 const REASONS_NOT_DEAL = [
   'TIDAK_BERMINAT', 'HARGA_MAHAL', 'SUDAH_PUNYA', 'DOWN_PAYMENT_MAHAL',
   'JARAK_TEMPAT', 'RESPON_LAMBAT', 'TIDAK_RESPON', 'BANTUAN_PIMPINAN',
@@ -529,33 +536,33 @@ const editMsg = async (chatId, msgId, text, opts) => {
 const parseIndividuLine = (line) => {
   // Normalize: collapse multiple spaces, trim
   const normalized = line.replace(/\s+/g, ' ').trim();
-  
+
   // Check prefix
   if (!normalized.toLowerCase().startsWith('individu')) {
     return { error: 'Format harus dimulai dengan "individu"' };
   }
-  
+
   // Detect separator: pipe | vs space
   const afterPrefix = normalized.slice(8).trim();
   const usePipe = afterPrefix.includes('|');
-  
+
   let parts;
   if (usePipe) {
     parts = afterPrefix.split('|').map(p => p.trim());
   } else {
     parts = afterPrefix.split(' ');
   }
-  
+
   if (parts.length < 10) {
     return { error: 'Data terlalu pendek. Gunakan format: individu|NO|NAMA|GENDER|ALAMAT|PROVINSI|KABUPATEN|KECAMATAN|DESA|RT|RW|GENDER|AGAMA|PEKERJAAN|HP|STATUS|BAYAR|KODEMOTOR' };
   }
-  
+
   // Pipe format field mapping:
   // 0=no, 1=nama, 2=alamat, 3=provinsi, 4=kabupaten, 5=kecamatan, 6=desa, 7=rt, 8=rw,
   // 9=gender, 10=agama, 11=pekerjaan, 12=hp, 13=status, 14=bayar, 15=kodeMotor, 16=nik
-  
+
   let noUrut, nama, gender, alamat, rt, rw, provinsi, kabupaten, kecamatan, desa, agama, pekerjaan, hp, statusKredit, kodeMotor, nik;
-  
+
   if (usePipe) {
     // Skip empty first element if parts[0] is empty (case: "individu|3|...")
     const offset = parts[0] === '' ? 1 : 0;
@@ -624,14 +631,14 @@ const parseIndividuLine = (line) => {
       idx++;
     }
   }
-  
+
   const occupation = getOccupationHso(pekerjaan);
   // Only set motor if kodeMotor is a valid motor code (not TUNAI, kosong, etc.)
   const motorCodes = new Set(getMotorList().map(m => m.code));
   const motor = kodeMotor && motorCodes.has(kodeMotor)
     ? { code: kodeMotor, name: getMotorList().find(m => m.code === kodeMotor)?.name || kodeMotor }
     : null;
-  
+
   return {
     success: true,
     data: {
@@ -679,7 +686,7 @@ const createProspek = async (data) => {
     occupation: data.occupation || 'Wiraswasta',
     religion: 'ISLAM',
   };
-  
+
   // WILAYAH fields only for MEDIUM/HOT — LOW tidak perlu alamat/provinsi/dsb
   if (!isLOW) {
     const w = resolveWilayah(data.subDistrictName || 'SEPAKU', data.villageName || 'SEPAKU');
@@ -696,7 +703,7 @@ const createProspek = async (data) => {
     body.rW = data.rw || '001';
     body.address = data.address || 'PENAJAM';
   }
-  
+
   // Optional fields
   if (data.motorType) {
     body.catalogueUnitDescription = data.motorType;
@@ -704,12 +711,12 @@ const createProspek = async (data) => {
   }
   if (data.nik) body.iDNumber = data.nik;
   if (data.description) body.description = data.description;
-  
+
   // Asal Prospek (WAJIB)
   if (data.asalId) {
     body.sourceOfProspectHsoId = data.asalId;
   }
-  
+
   // Occupation dengan UUID
   if (data.occupation) {
     const occ = getOccupationHso(data.occupation);
@@ -720,10 +727,10 @@ const createProspek = async (data) => {
     }
     body.occupation = data.occupation;
   }
-  
+
   const result = callStar(MUT_CREATE, { data: body });
   const prospect = result.ensureCreateCustomerProspectFromCustomers;
-  
+
   // Auto update status untuk MEDIUM/HOT via ensureUpdateCustomerProspectStatusFromCustomers
   if (!isLOW) {
     const statusLevel = data.level; // 'MEDIUM' or 'HOT'
@@ -740,7 +747,7 @@ const createProspek = async (data) => {
       console.error('Status update error:', e.message);
     }
   }
-  
+
   return prospect;
 };
 
@@ -1258,7 +1265,7 @@ bot.on('callback_query', async (q) => {
     if (!s || s.step !== 'ff_confirm' || !s.ff_data) {
       return bot.sendMessage(chatId, '❌ Session expired. Mulai ulang dari menu.', replyKeyboard());
     }
-    
+
     const results = s.ff_data;
     const errors = s.ff_errors || [];
 
@@ -1269,7 +1276,7 @@ bot.on('callback_query', async (q) => {
 
     // Confirm to user
     await editMsg(chatId, msgId, `⏳ *Memproses ${results.length} data...*\n\nEstimasi: ~${fmtTime(totalEstMin)}\nProgress akan diupdate otomatis.`, {});
-    
+
     const success = [];
     const failed = [];
     let processedCount = 0;
@@ -1290,7 +1297,7 @@ bot.on('callback_query', async (q) => {
 
     for (const d of results) {
       processedCount++;
-      
+
       // Local dedup: skip if same HP already processed in this batch
       if (processedHp.has(d.hp)) {
         console.log('FF/Excel: skip duplicate HP in batch:', d.hp, d.nama);
@@ -1298,7 +1305,7 @@ bot.on('callback_query', async (q) => {
         continue;
       }
       processedHp.add(d.hp);
-      
+
       try {
         // Cek existing HP dari data yang sudah di-fetch sebelum loop
         const allProspectNodes = Array.isArray(allProspects) ? allProspects : (allProspects?.getCustomerProspectFromCustomers?.nodes || []);
@@ -1332,7 +1339,7 @@ bot.on('callback_query', async (q) => {
 
         // WILAYAH only for MEDIUM/HOT — LOW tidak perlu alamat/provinsi/dsb
         if (!isLOW) {
-          const w = resolveWilayah(d.kecamatan, d.desa);
+          const w = resolveWilayah(d.kecamatan, d.desa, d.provinsi, d.kabupaten);
           body.provinceId = w.provinceId;
           body.provinceName = w.provinceName;
           body.districtId = w.districtId;
@@ -1396,14 +1403,14 @@ bot.on('callback_query', async (q) => {
         } catch (e) {
           console.log('Follow-up skip:', e.message);
         }
-        
+
         success.push({ nama: d.nama, prospectNumber: prospect.prospectNumber || '-' });
-        
+
       } catch (e) {
         console.error('FF/Excel create error:', e.message, '| data:', JSON.stringify({ nama: d.nama, hp: d.hp, no: d.no }));
         failed.push({ nama: d.nama, hp: d.hp, reason: e.message || 'Unknown error' });
       }
-      
+
       // Progress notification — before delay, biar user langsung tau hasil
       const showProgress = (processedCount % PROGRESS_INTERVAL === 0 || processedCount === results.length || results.length <= 3);
       if (showProgress) {
@@ -1420,7 +1427,7 @@ bot.on('callback_query', async (q) => {
         try { await bot.editMessageText(progressTxt, { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown' }); }
         catch (e) { console.log('FF/Excel progress edit error:', e.message); }
       }
-      
+
       // ⏳ Human delay — hanya jika item ini sukses (gagal = skip delay)
       const currentFailed = failed.find(f => f.hp === d.hp);
       if (!currentFailed) {
@@ -1431,13 +1438,13 @@ bot.on('callback_query', async (q) => {
         await new Promise(r => setTimeout(r, humanDelay(baseMin)));
       }
     }
-    
+
     // Build result message — limit each section to avoid Telegram 4096 char limit
     const MAX_SUCC_DETAIL = 10;
     const MAX_FAIL_DETAIL = 5;
     const levelEmoji = s.ff_level === 'LOW' ? '🟢' : s.ff_level === 'HOT' ? '🔴' : '🟡';
     let resultTxt = `📊 *Hasil FF/Excel*   ${levelEmoji} ${s.ff_level || 'MEDIUM'}\n\n`;
-    
+
     if (success.length > 0) {
       const newSucc = success.filter(s => !s.duplicate);
       const dups = success.filter(s => s.duplicate);
@@ -1459,7 +1466,7 @@ bot.on('callback_query', async (q) => {
       }
       resultTxt += `\n`;
     }
-    
+
     if (failed.length > 0) {
       resultTxt += `❌ *Gagal: ${failed.length}*\n`;
       for (const f of failed.slice(0, MAX_FAIL_DETAIL)) {
@@ -1469,18 +1476,18 @@ bot.on('callback_query', async (q) => {
         resultTxt += `  ... dan ${failed.length - MAX_FAIL_DETAIL} lainnya\n`;
       }
     }
-    
+
     if (errors.length > 0) {
       resultTxt += `\n⚠️ *Parse Error: ${errors.length}*\n`;
       for (const e of errors.slice(0, 3)) {
         resultTxt += `• ${e.error}: \`${e.line}...\`\n`;
       }
     }
-    
+
     conv.delete(chatId);
     return bot.sendMessage(chatId, resultTxt, { parse_mode: 'Markdown', ...replyKeyboard() });
   }
-  
+
   // --- FF CANCEL ---
   if (c && c.step && c.step.startsWith('ff_') && data === 'cancel') {
     conv.delete(chatId);
@@ -1508,7 +1515,7 @@ bot.on('callback_query', async (q) => {
     s.data.asalName = asal.name;
     s.data.asalKey = asalKey;
     convSet(chatId, s);
-    
+
     // LOW: selesai, langsung preview
     if (s.level === 'LOW') {
       return showPreview(chatId, s);
@@ -1527,7 +1534,7 @@ bot.on('callback_query', async (q) => {
     s.data.motorCode = motorCode;
     s.data.motorType = motorCode;
     convSet(chatId, s);
-    
+
     // Lanjut occupation
     s.step = 'ask_occupation';
     convSet(chatId, s);
@@ -1598,13 +1605,13 @@ bot.on('callback_query', async (q) => {
         const result = await callStar(QRY_SEARCH);
         const node = result?.getCustomerProspectFromCustomers?.nodes?.find(n => n.id === prospectId);
         if (!node) return editMsg(chatId, msgId, '❌ Prospek tidak ditemukan.', backBtn('upgrade:menu'));
-        
+
         const curStatus = node.prospectStatus;
         if (!VALID_UPGRADES[curStatus]?.includes(status)) {
           return editMsg(chatId, msgId,
             `❌ Tidak bisa upgrade *${curStatus}* → *${status}* (status tidak bisa turun).`, backBtn('upgrade:menu'));
         }
-        
+
         // Konfirmasi
         const txt = `⬆️ *Konfirmasi Upgrade*\n\n📌 ${node.prospectNumber}\n👤 ${node.name}\n📞 ${node.mobilePhoneNumber}\n📊 ${curStatus} → *${status}*\n\nLanjutkan?`;
         convSet(chatId, { step: 'upgrade_confirm', prospectId, newStatus: status, curStatus });
@@ -1654,10 +1661,10 @@ bot.on('callback_query', async (q) => {
       const allNodes = result?.getCustomerProspectFromCustomers?.nodes || [];
       const node = allNodes.find(n => n.id === prospectId);
       if (!node) return editMsg(chatId, msgId, '❌ Tidak ditemukan.', backBtn('menu'));
-      
+
       const curStatus = node.prospectStatus;
       const availableUpgrades = VALID_UPGRADES[curStatus] || [];
-      
+
       let txt = `📋 *Detail Prospek*\n\n`;
       txt += `📌 \`${node.prospectNumber}\`\n`;
       txt += `👤 ${node.name}\n`;
@@ -1668,7 +1675,7 @@ bot.on('callback_query', async (q) => {
       if (node.catalogueUnitColorDescription) txt += `🏍 ${node.catalogueUnitColorDescription}\n`;
       if (node.description) txt += `📝 ${node.description}\n`;
       txt += `📅 ${(node.created||'').slice(0,10)}\n`;
-      
+
       if (availableUpgrades.length > 0) {
         txt += `\n*Upgrade ke:*`;
         const buttons = availableUpgrades.map(st => ({
@@ -1725,6 +1732,7 @@ bot.on('callback_query', async (q) => {
 
     // Collect ALL prospect names per status (paginated, S0001-safe)
     const statuses = targetStatus === 'ALL' ? ['HOT', 'MEDIUM', 'LOW'] : [targetStatus];
+    const monthRange = currentWitaMonthRange();
     const counts = {};
     const allNames = { HOT: [], MEDIUM: [], LOW: [] };
     let totalCount = 0;
@@ -1735,7 +1743,7 @@ bot.on('callback_query', async (q) => {
         let hasMore = true;
         while (hasMore) {
           const cursorArg = after ? `, after: "${after}"` : '';
-          const q = '{ getCustomerProspectFromCustomers(first: 10' + cursorArg + ', where: { prospectNumber: { startsWith: "H704-PRS" }, prospectStatus: { eq: ' + st + ' }, createdBy: { eq: "' + currentJwtUuid() + '" }, created: { gte: "2026-07-01T00:00:00Z", lte: "2026-07-31T23:59:59Z" } }) { nodes { id prospectNumber name prospectStatus } pageInfo { hasNextPage endCursor } } }';
+          const q = '{ getCustomerProspectFromCustomers(first: 10' + cursorArg + ', where: { prospectNumber: { startsWith: "H704-PRS" }, prospectStatus: { eq: ' + st + ' }, createdBy: { eq: "' + currentJwtUuid() + '" }, created: { gte: "' + monthRange.gte + '", lte: "' + monthRange.lte + '" } }) { nodes { id prospectNumber name prospectStatus } pageInfo { hasNextPage endCursor } } }';
           const d = callStar(q);
           const nodes = d.getCustomerProspectFromCustomers.nodes;
           const pi = d.getCustomerProspectFromCustomers.pageInfo;
@@ -1815,6 +1823,7 @@ bot.on('callback_query', async (q) => {
     // reasonNotDeal menerima plain string bebas — tidak lagi hardcode TIDAK_BERMINAT.
     const targetStatus = s.notdeal_status;
     const statuses = targetStatus === 'ALL' ? ['HOT', 'MEDIUM', 'LOW'] : [targetStatus];
+    const monthRange = currentWitaMonthRange();
     const statusLabel = targetStatus === 'ALL' ? 'HOT + MEDIUM + LOW' : targetStatus;
     const allNames = s._ndNames || { HOT: [], MEDIUM: [], LOW: [] };
     const counts = s._ndCounts || {};
@@ -1853,7 +1862,7 @@ bot.on('callback_query', async (q) => {
       while (hasMore) {
         try {
           const cursorArg = after ? `, after: "${after}"` : '';
-          const q = '{ getCustomerProspectFromCustomers(first: 10' + cursorArg + ', where: { prospectNumber: { startsWith: "H704-PRS" }, prospectStatus: { eq: ' + st + ' }, createdBy: { eq: "' + currentJwtUuid() + '" }, created: { gte: "2026-07-01T00:00:00Z", lte: "2026-07-31T23:59:59Z" } }) { nodes { id prospectNumber name prospectStatus } pageInfo { hasNextPage endCursor } } }';
+          const q = '{ getCustomerProspectFromCustomers(first: 10' + cursorArg + ', where: { prospectNumber: { startsWith: "H704-PRS" }, prospectStatus: { eq: ' + st + ' }, createdBy: { eq: "' + currentJwtUuid() + '" }, created: { gte: "' + monthRange.gte + '", lte: "' + monthRange.lte + '" } }) { nodes { id prospectNumber name prospectStatus } pageInfo { hasNextPage endCursor } } }';
           const d = callStar(q);
           const nodes = d.getCustomerProspectFromCustomers.nodes;
           const pi = d.getCustomerProspectFromCustomers.pageInfo;
@@ -1873,7 +1882,7 @@ bot.on('callback_query', async (q) => {
               //    "Prospek Lost" di timeline. JANGAN tambah ensureCreateFollowUpProspect
               //    karena itu bikin entri "Follow up Prospek Selanjutnya" yang meng-
               //    aktifkan ulang prospek → tidak jadi Lost (bug dobel follow-up).
-              callStar(MUT_ND, { data: { customerProspectId: p.id, prospectStatus: 'LOST', reasonNotDeal: NOTDEAL_REASON } });
+              callStar(MUT_ND, { data: { customerProspectId: p.id, prospectStatus: 'LOST', reasonNotDeal: NOTDEAL_REASON_ID } });
               totalOk++;
               ok = true;
               if (st === 'HOT') okHot.push(p.name);
@@ -2090,14 +2099,26 @@ bot.on('callback_query', async (q) => {
       return bot.sendMessage(chatId, '❌ Session expired. Mulai ulang dari menu Leads.', replyKeyboard());
     }
 
-    bot.sendMessage(chatId, '⏳ *Mohon tunggu, sedang memproses...*', { parse_mode: 'Markdown' });
+    const totalLeads = leadsData.length;
+    const estimatedMinutes = Math.ceil(totalLeads * 0.5); // ~30 detik per lead
+    const startTime = Date.now();
+
+    const progressMsg = await bot.sendMessage(
+      chatId,
+      `⏳ *Memproses ${totalLeads} leads...*\n\n` +
+      `📊 Progress: 0/${totalLeads}\n` +
+      `⏱️ Estimasi: ~${estimatedMinutes} menit\n` +
+      `🕐 Mulai: ${new Date().toLocaleTimeString('id-ID', { timeZone: 'Asia/Makassar' })}`,
+      { parse_mode: 'Markdown' }
+    );
 
     auditLog('leads_bulk_followup', { chatId, count: leadsData.length });
 
     let totalOk = 0, totalFail = 0;
     const failedList = [];
 
-    for (const lead of leadsData) {
+    for (let i = 0; i < leadsData.length; i++) {
+      const lead = leadsData[i];
       try {
         callStar(MUT_LEADS_FOLLOWUP, {
           input: {
@@ -2115,8 +2136,35 @@ bot.on('callback_query', async (q) => {
         totalFail++;
         if (failedList.length < 5) failedList.push(`${lead.customerName}: ${e.message}`);
       }
+
+      // Update progress setiap lead
+      const processed = i + 1;
+      const elapsed = Math.round((Date.now() - startTime) / 1000);
+      const remaining = totalLeads - processed;
+      const etaSeconds = remaining * 30; // ~30 detik per lead
+      const etaMinutes = Math.ceil(etaSeconds / 60);
+
+      try {
+        await bot.editMessageText(
+          `⏳ *Memproses ${totalLeads} leads...*\n\n` +
+          `📊 Progress: ${processed}/${totalLeads} (${Math.round(processed/totalLeads*100)}%)\n` +
+          `✅ Sukses: ${totalOk} | ❌ Gagal: ${totalFail}\n` +
+          `⏱️ Sisa waktu: ~${etaMinutes} menit\n` +
+          `⌛ Elapsed: ${Math.floor(elapsed/60)}m ${elapsed%60}s`,
+          {
+            chat_id: chatId,
+            message_id: progressMsg.message_id,
+            parse_mode: 'Markdown'
+          }
+        );
+      } catch (e) {
+        // Ignore edit errors (rate limit)
+      }
+
       // ⏳ Human delay — dipercepat jadi 30 detik antar leads follow-up
-      await new Promise(r => setTimeout(r, humanDelay(0.5)));
+      if (i < leadsData.length - 1) { // Skip delay untuk lead terakhir
+        await new Promise(r => setTimeout(r, humanDelay(0.5)));
+      }
     }
 
     conv.delete(chatId);
@@ -2187,14 +2235,26 @@ bot.on('callback_query', async (q) => {
       return bot.sendMessage(chatId, '❌ Session expired. Mulai ulang dari menu Leads.', replyKeyboard());
     }
 
-    bot.sendMessage(chatId, '⏳ *Mohon tunggu, sedang memproses...*', { parse_mode: 'Markdown' });
+    const totalLeads = leadsData.length;
+    const estimatedMinutes = Math.ceil(totalLeads * 0.5); // ~30 detik per lead
+    const startTime = Date.now();
+
+    const progressMsg = await bot.sendMessage(
+      chatId,
+      `⏳ *Memproses ${totalLeads} new leads...*\n\n` +
+      `📊 Progress: 0/${totalLeads}\n` +
+      `⏱️ Estimasi: ~${estimatedMinutes} menit\n` +
+      `🕐 Mulai: ${new Date().toLocaleTimeString('id-ID', { timeZone: 'Asia/Makassar' })}`,
+      { parse_mode: 'Markdown' }
+    );
 
     auditLog('leads_bulk_followup_new', { chatId, count: leadsData.length });
 
     let totalOk = 0, totalFail = 0;
     const failedList = [];
 
-    for (const lead of leadsData) {
+    for (let i = 0; i < leadsData.length; i++) {
+      const lead = leadsData[i];
       try {
         callStar(MUT_LEADS_FOLLOWUP, {
           input: {
@@ -2212,8 +2272,35 @@ bot.on('callback_query', async (q) => {
         totalFail++;
         if (failedList.length < 5) failedList.push(`${lead.customerName}: ${e.message}`);
       }
+
+      // Update progress setiap lead
+      const processed = i + 1;
+      const elapsed = Math.round((Date.now() - startTime) / 1000);
+      const remaining = totalLeads - processed;
+      const etaSeconds = remaining * 30; // ~30 detik per lead
+      const etaMinutes = Math.ceil(etaSeconds / 60);
+
+      try {
+        await bot.editMessageText(
+          `⏳ *Memproses ${totalLeads} new leads...*\n\n` +
+          `📊 Progress: ${processed}/${totalLeads} (${Math.round(processed/totalLeads*100)}%)\n` +
+          `✅ Sukses: ${totalOk} | ❌ Gagal: ${totalFail}\n` +
+          `⏱️ Sisa waktu: ~${etaMinutes} menit\n` +
+          `⌛ Elapsed: ${Math.floor(elapsed/60)}m ${elapsed%60}s`,
+          {
+            chat_id: chatId,
+            message_id: progressMsg.message_id,
+            parse_mode: 'Markdown'
+          }
+        );
+      } catch (e) {
+        // Ignore edit errors (rate limit)
+      }
+
       // ⏳ Human delay — dipercepat jadi 30 detik antar leads follow-up
-      await new Promise(r => setTimeout(r, humanDelay(0.5)));
+      if (i < leadsData.length - 1) { // Skip delay untuk lead terakhir
+        await new Promise(r => setTimeout(r, humanDelay(0.5)));
+      }
     }
 
     conv.delete(chatId);
@@ -2241,36 +2328,36 @@ bot.on('callback_query', async (q) => {
 bot.on('document', async (msg) => {
   const chatId = msg.chat.id;
   const doc = msg.document;
-  
+
   if (!doc) return;
-  
+
   // Check file type
   const fileName = doc.file_name || '';
-  
+
   if (!fileName.match(/\.(xlsx|xls|csv|txt)$/i)) {
     return bot.sendMessage(chatId, '❌ File tidak dikenali. Kirim file .xlsx, .xls, .csv, atau .txt');
   }
-  
+
   try {
     // Download file
     const file = await bot.getFile(doc.file_id);
     const fileUrl = `https://api.telegram.org/file/bot${TG_TOKEN}/${file.file_path}`;
-    
+
     await bot.sendMessage(chatId, `📥 Mendownload file ${fileName}...`);
-    
+
     // Fetch file content
     const response = await fetch(fileUrl);
-    
+
     const isExcel = fileName.match(/\.(xlsx|xls)$/i);
     let lines = [];
     let detectedLevel = 'MEDIUM';
     let levelEmoji = '🟡';
-    
+
     if (isExcel) {
       // Parse Excel binary file using XLSX library
       const buffer = await response.arrayBuffer();
       const workbook = XLSX.read(new Uint8Array(buffer), { type: 'array' });
-      
+
       // Find the sheet with prospek data (prefer MEDIUM sheet)
       let ws = workbook.Sheets['MEDIUM'];
       if (!ws) {
@@ -2291,11 +2378,11 @@ bot.on('document', async (msg) => {
           }
         }
       }
-      
+
       if (!ws) {
         return bot.sendMessage(chatId, '❌ Sheet data tidak ditemukan. Pastikan ada sheet dengan kolom Nama.');
       }
-      
+
       // Parse rows
       const range = XLSX.utils.decode_range(ws['!ref'] || 'A1');
       const headers = [];
@@ -2303,14 +2390,14 @@ bot.on('document', async (msg) => {
         const addr = XLSX.utils.encode_cell({ r: 0, c: C });
         headers.push(ws[addr]?.v?.toString().toLowerCase().trim() || '');
       }
-      
+
       // Normalize header by removing spaces and lowercasing
       const normalizeHeader = (h) => h.replace(/\s+/g, '').toLowerCase();
       const headersNorm = headers.map(normalizeHeader);
-      
+
       // Find column indices (normalize to match)
       const idx = (name) => headersNorm.indexOf(name.replace(/\s+/g, '').toLowerCase());
-      
+
       const colMap = {
         jenis: idx('jenissales'),
         kodeAsal: idx('kodeasalprospek'),
@@ -2331,7 +2418,7 @@ bot.on('document', async (msg) => {
         motor: idx('tipemotor'),
         nik: idx('nik') >= 0 ? idx('nik') : idx('nomornik'),
       };
-      
+
       // Detect level from columns:
       // HOT = punya NIK (16 digit)
       // MEDIUM = punya alamat/provinsi/motor (tanpa NIK)
@@ -2349,7 +2436,7 @@ bot.on('document', async (msg) => {
         detectedLevel = 'LOW';
         levelEmoji = '🟢';
       }
-      
+
       // Build text lines from Excel rows — now uses PIPE format
       for (let R = range.s.r + 1; R <= range.e.r; R++) {
         const row = {};
@@ -2363,7 +2450,7 @@ bot.on('document', async (msg) => {
             }
           }
         }
-        
+
         // Only process 'individu' type
         if (row.jenis && row.jenis.toLowerCase() === 'individu') {
           // Extract RT/RW from address (more reliable than spreadsheet column)
@@ -2377,7 +2464,7 @@ bot.on('document', async (msg) => {
 
           // Detect HOT format: has NIK column between kodeAsal and nama
         const isHotFormat = colMap.nik >= 0;
-        
+
         // Pipe-separated output — adapts to HOT format if NIK present
         // HOT: jenis|no|nama|alamat|prov|kota|kecamatan|desa|rt|rw|gender|agama|pekerjaan|hp|status|bayar|motor|nik
         // MEDIUM: jenis|no|nama|alamat|prov|kota|kecamatan|desa|rt|rw|gender|agama|pekerjaan|hp|status|bayar|motor
@@ -2400,7 +2487,7 @@ bot.on('document', async (msg) => {
         pipeParts.push(row.payment || 'tunai');              // 15: BAYAR
         pipeParts.push(row.motor || '');                     // 16: KODE MOTOR
         pipeParts.push(row.nik || '');                       // 17: NIK (HOT format)
-        
+
         lines.push(pipeParts.join('|'));
         }
       }
@@ -2409,7 +2496,7 @@ bot.on('document', async (msg) => {
       const content = await response.text();
       lines = content.split('\n').filter(l => l.trim().length > 0);
     }
-    
+
     // Parse lines
     const results = [];
     const errors = [];
@@ -2422,13 +2509,13 @@ bot.on('document', async (msg) => {
       }
       results.push(parsed.data);
     }
-    
+
     if (results.length === 0) {
       return bot.sendMessage(chatId,
         `❌ *Gagal parse data*\n\nFile tidak mengandung format "individu".`,
         { parse_mode: 'Markdown' });
     }
-    
+
     // Resolve level: Excel uses column detection (set above); CSV/TXT uses data heuristic
     if (!isExcel) {
       const isLowData = results.every(d => (!d.motor || !d.motor.code) && (!d.alamat || d.alamat === 'PENAJAM'));
@@ -2436,7 +2523,7 @@ bot.on('document', async (msg) => {
       levelEmoji = detectedLevel === 'LOW' ? '🟢' : '🟡';
     }
     // For Excel: detectedLevel & levelEmoji already set inside the isExcel block above
-    
+
     // Show preview — limit to first 5 details to avoid Telegram 4096 char limit
     const MAX_PREVIEW = 5;
     const showCount = Math.min(results.length, MAX_PREVIEW);
@@ -2458,7 +2545,7 @@ bot.on('document', async (msg) => {
       else replyTxt += `${creditText}\n`;
       replyTxt += `💼 ${occText}\n`;
     }
-    
+
     if (results.length > MAX_PREVIEW) {
       replyTxt += `\n... dan ${results.length - MAX_PREVIEW} data lainnya\n`;
     }
@@ -2466,9 +2553,9 @@ bot.on('document', async (msg) => {
     replyTxt += `✅ ${results.length} data siap diproses\n`;
     replyTxt += `⚠️ ${errors.length} parse error\n\n`;
     replyTxt += `💡 Klik *Kirim* untuk submit ke Star API`;
-    
+
     convSet(chatId, { step: 'ff_confirm', ff_data: results, ff_errors: errors, ff_level: detectedLevel });
-    
+
     return bot.sendMessage(chatId, replyTxt, {
       parse_mode: 'Markdown',
       reply_markup: {
@@ -2478,7 +2565,7 @@ bot.on('document', async (msg) => {
         ]
       }
     });
-    
+
   } catch (e) {
     console.error('Document error:', e);
     return bot.sendMessage(chatId, `❌ Gagal membaca file: ${e.message}`);
@@ -2503,7 +2590,7 @@ bot.on('message', async (msg) => {
     const lines = text.split('\n').filter(l => l.trim().length > 0);
     const results = [];
     const errors = [];
-    
+
     for (const line of lines) {
       const parsed = parseIndividuLine(line);
       if (!parsed.success) {
@@ -2512,29 +2599,29 @@ bot.on('message', async (msg) => {
       }
       results.push(parsed.data);
     }
-    
+
     if (results.length === 0) {
       return bot.sendMessage(chatId,
         `❌ *Gagal parse semua data*\n\n` +
         errors.map(e => `• ${e.error}: \`${e.line}...\``).join('\n'),
         { parse_mode: 'Markdown', ...cancelBtn() });
     }
-    
+
     // Detect level from data: LOW jika alamat default & tidak ada motor
     const isLowData = results.every(d => (!d.motor || !d.motor.code) && (!d.alamat || d.alamat === 'PENAJAM'));
     const detectedLevel = isLowData ? 'LOW' : 'MEDIUM';
     const levelEmoji = detectedLevel === 'LOW' ? '🟢' : '🟡';
-    
+
     // Show preview for each
     let replyTxt = `📊 *Preview FF/Excel* — ${results.length} data    ${levelEmoji} ${detectedLevel}\n\n`;
-    
+
     for (let i = 0; i < results.length; i++) {
       const d = results[i];
       const isLOW = detectedLevel === 'LOW';
       const motorText = d.motor ? `🏍 ${d.motor.name}` : (isLOW ? '' : '⚠️ Kode motor tidak dikenali');
       const occText = d.occupationHso ? d.occupationHso.name : d.pekerjaan;
       const creditText = d.statusKredit === 'KREDIT' ? '🔴 Kredit' : '🟢 Tunai';
-      
+
       replyTxt += `─────────────────\n`;
       replyTxt += `*#${d.no} — ${d.nama}*\n`;
       replyTxt += `👤 ${d.gender === 'LAKI_LAKI' ? 'Laki-laki' : 'Perempuan'} | ${d.agama}\n`;
@@ -2544,14 +2631,14 @@ bot.on('message', async (msg) => {
       else replyTxt += `${creditText}\n`;
       replyTxt += `💼 ${occText}\n`;
     }
-    
+
     replyTxt += `\n─────────────────\n`;
     replyTxt += `✅ ${results.length} data siap diproses\n`;
     replyTxt += `⚠️ ${errors.length} error`;
-    
+
     // Save to session for confirmation
     convSet(chatId, { step: 'ff_confirm', ff_data: results, ff_errors: errors, ff_level: detectedLevel });
-    
+
     return bot.sendMessage(chatId, replyTxt, {
       parse_mode: 'Markdown',
       reply_markup: {
@@ -2568,7 +2655,7 @@ bot.on('message', async (msg) => {
     const lines = text.split('\n').filter(l => l.trim().length > 0);
     const results = [];
     const errors = [];
-    
+
     for (const line of lines) {
       const parsed = parseIndividuLine(line);
       if (!parsed.success) {
@@ -2577,28 +2664,28 @@ bot.on('message', async (msg) => {
       }
       results.push(parsed.data);
     }
-    
+
     if (results.length === 0) {
       return bot.sendMessage(chatId,
         `❌ *Gagal parse data*\n\n` +
         errors.map(e => `• ${e.error}: \`${e.line}...\``).join('\n'),
         { parse_mode: 'Markdown' });
     }
-    
+
     // Detect level from data: LOW jika alamat default & tidak ada motor
     const isLowData = results.every(d => (!d.motor || !d.motor.code) && (!d.alamat || d.alamat === 'PENAJAM'));
     const detectedLevel = isLowData ? 'LOW' : 'MEDIUM';
     const levelEmoji = detectedLevel === 'LOW' ? '🟢' : '🟡';
-    
+
     // Show preview
     let replyTxt = `📊 *Preview FF/Excel* — ${results.length} data    ${levelEmoji} ${detectedLevel}\n\n`;
-    
+
     for (const d of results) {
       const isLOW = detectedLevel === 'LOW';
       const motorText = d.motor ? `🏍 ${d.motor.name}` : (isLOW ? '' : '⚠️ Kode motor tidak dikenali');
       const occText = d.occupationHso ? d.occupationHso.name : d.pekerjaan;
       const creditText = d.statusKredit === 'KREDIT' ? '🔴 Kredit' : '🟢 Tunai';
-      
+
       replyTxt += `─────────────────\n`;
       replyTxt += `*#${d.no} — ${d.nama}*\n`;
       replyTxt += `👤 ${d.gender === 'LAKI_LAKI' ? 'Laki-laki' : 'Perempuan'} | ${d.agama}\n`;
@@ -2608,14 +2695,14 @@ bot.on('message', async (msg) => {
       else replyTxt += `${creditText}\n`;
       replyTxt += `💼 ${occText}\n`;
     }
-    
+
     replyTxt += `\n─────────────────\n`;
     replyTxt += `✅ ${results.length} data siap diproses\n`;
     replyTxt += `⚠️ ${errors.length} parse error\n\n`;
     replyTxt += `💡 Klik *Kirim* untuk submit ke Star API`;
-    
+
     convSet(chatId, { step: 'ff_confirm', ff_data: results, ff_errors: errors, ff_level: detectedLevel });
-    
+
     return bot.sendMessage(chatId, replyTxt, {
       parse_mode: 'Markdown',
       reply_markup: {
@@ -2651,7 +2738,7 @@ bot.on('message', async (msg) => {
   if (s.step === 'ask_occupation') {
     if (text.length < 2) return bot.sendMessage(chatId, '❌ Pekerjaan terlalu pendek.');
     s.data.occupation = text;
-    
+
     if (s.level === 'MEDIUM') {
       s.step = 'ask_address';
       convSet(chatId, s);
