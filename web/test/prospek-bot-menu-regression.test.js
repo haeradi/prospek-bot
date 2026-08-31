@@ -13,6 +13,11 @@ test('Bulk Not Deal memakai snapshot aman maksimum 200, bukan re-fetch cursor sa
  assert.match(execute, /const snapshotItems = Array\.isArray\(s\._ndItems\)/);
  assert.doesNotMatch(execute, /getCustomerProspectFromCustomers\(first: 10/);
 });
+test('read-only STAR query retry body kosong tetapi mutation tidak diulang',()=>{
+ assert.match(source, /const attempts = query\.includes\('mutation'\) \? 1 : 3;/);
+ assert.match(source, /STAR_EMPTY_RESPONSE/);
+ assert.match(source, /const first = Math\.min\(25, remaining\);/);
+});
 test('callback Telegram kedaluwarsa tidak menjatuhkan bot',()=>{
  assert.match(source, /answerCallbackQuery\(q\.id\)\.catch/);
 });

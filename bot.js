@@ -102,37 +102,46 @@ const execSync = require('child_process').execSync;
 const callStar = (query, vars) => {
   const body = JSON.stringify({ query, variables: vars || {} });
   const escaped = body.replace(/'/g, "'\\''");
-  const cmd = `curl -s --max-time 30 '${STAR_API}' ` +
-    `-H 'Authorization: Bearer ${jwt}' ` +
+  const cmd = `curl -sS --fail-with-body --max-time 30 '${STAR_API}' ` +
+    `-H 'Authorization: Bearer ***' ` +
     `-H 'Content-Type: application/json; charset=utf-8' ` +
     `-H 'origin: ${ORIGIN}' ` +
     `-H 'referer: ${ORIGIN}/' ` +
-    `-H 'user-agent: Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Mobile Safari/537.36' ` +
+    `-H 'user-agent: Mozilla/5.0' ` +
     `-d '${escaped}'`;
-  // Audit: log all Star API mutations (create/update prospect, follow-up, status)
-  try {
-    if (query.includes('mutation')) {
+  const isMutation = query.includes('mutation');
+  const attempts = query.includes('mutation') ? 1 : 3;
+  if (isMutation) {
+    try {
       const name = query.match(/mutation\s+(\w+)/)?.[1] || '?';
-      const keys = Object.keys(vars?.data || {}).slice(0, 4).join(',');
-      auditLog('star_mutation', { mutation: name, fields: keys });
+      auditLog('star_mutation', { mutation: name, fields: Object.keys(vars?.data || {}).slice(0, 4).join(',') });
+    } catch {}
+  }
+  let lastError;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    let stdout = '';
+    try {
+      stdout = execSync(cmd, { encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 });
+      if (!stdout || !stdout.trim()) throw new Error('STAR_EMPTY_RESPONSE');
+      let json;
+      try { json = JSON.parse(stdout); } catch { throw new Error('STAR_INVALID_JSON_RESPONSE'); }
+      if (json.errors) {
+        const msgs = json.errors.map(e => e.message).join(', ');
+        console.error('callStar API error:', msgs, '| response:', JSON.stringify(json.errors).slice(0, 500));
+        throw new Error(msgs);
+      }
+      if (!json.data) throw new Error('STAR_RESPONSE_NO_DATA');
+      return json.data;
+    } catch (e) {
+      lastError = e;
+      // Mutation tidak pernah diulang: hasil remote dapat ambigu setelah request dimulai.
+      if (isMutation || attempt === attempts || !['STAR_EMPTY_RESPONSE','STAR_INVALID_JSON_RESPONSE'].includes(e.message)) throw e;
+      console.warn(`callStar read retry ${attempt}/${attempts}: ${e.message}`);
     }
-  } catch {}
-
-  let stdout;
-  try {
-    stdout = execSync(cmd, { encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 });
-  } catch (e) {
-    if (e.stdout) stdout = e.stdout; else throw e;
   }
-  const json = JSON.parse(stdout);
-  if (json.errors) {
-    const msgs = json.errors.map(e => e.message).join(', ');
-    const fullLog = JSON.stringify(json.errors).slice(0, 500);
-    console.error('callStar API error:', msgs, '| response:', fullLog);
-    throw new Error(msgs);
-  }
-  return json.data;
+  throw lastError || new Error('STAR_READ_FAILED');
 };
+
 
 // ====== WILAYAH UUID (KALIMANTAN TIMUR - PENAJAM) ======
 // ====== WILAYAH MAP ======
@@ -1744,7 +1753,7 @@ bot.on('callback_query', async (q) => {
         let hasMore = true;
         while (hasMore && allItems.length < NOTDEAL_MAX_ITEMS) {
           const remaining = NOTDEAL_MAX_ITEMS - allItems.length;
-          const first = Math.min(50, remaining);
+          const first = Math.min(25, remaining);
           const cursorArg = after ? `, after: "${after}"` : '';
           const q = '{ getCustomerProspectFromCustomers(first: ' + first + cursorArg + ', where: { prospectNumber: { startsWith: "H704-PRS" }, prospectStatus: { eq: ' + st + ' }, createdBy: { eq: "' + currentJwtUuid() + '" }, created: { gte: "' + monthRange.gte + '", lte: "' + monthRange.lte + '" } }) { nodes { id prospectNumber name prospectStatus } pageInfo { hasNextPage endCursor } } }';
           const d = callStar(q);
