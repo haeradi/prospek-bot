@@ -3,6 +3,7 @@ const test=require('node:test'),assert=require('node:assert/strict'),fs=require(
 const source=fs.readFileSync(path.join(__dirname,'../../bot.js'),'utf8');
 test('Bulk Not Deal bot mempertahankan snapshot nama sampai konfirmasi',()=>{
  assert.match(source, /_ndNames: allNames/);
+ assert.match(source, /const NOTDEAL_REASON_ID = 'Ada keperluan lain';/);
  assert.doesNotMatch(source, /convSet\(chatId, \{ \.\.\.s, step: 'notdeal_confirm' \}\);/);
 });
 test('callback Telegram kedaluwarsa tidak menjatuhkan bot',()=>{
