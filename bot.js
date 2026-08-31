@@ -103,7 +103,7 @@ const callStar = (query, vars) => {
   const body = JSON.stringify({ query, variables: vars || {} });
   const escaped = body.replace(/'/g, "'\\''");
   const cmd = `curl -sS --fail-with-body --max-time 30 '${STAR_API}' ` +
-    `-H 'Authorization: Bearer ***' ` +
+    `-H 'Authorization: Bearer ${jwt}' ` +
     `-H 'Content-Type: application/json; charset=utf-8' ` +
     `-H 'origin: ${ORIGIN}' ` +
     `-H 'referer: ${ORIGIN}/' ` +
