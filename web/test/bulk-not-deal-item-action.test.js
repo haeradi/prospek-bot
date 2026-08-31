@@ -1,0 +1,3 @@
+'use strict';
+const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
+test('Bulk Not Deal menyediakan endpoint dan tombol konfirmasi per snapshot item',()=>{const service=fs.readFileSync(path.join(__dirname,'../src/bulk-not-deal-service.js'),'utf8'),server=fs.readFileSync(path.join(__dirname,'../src/app.js'),'utf8'),ui=fs.readFileSync(path.join(__dirname,'../public/app.js'),'utf8');assert.match(service,/confirmItem/);assert.match(service,/itemId/);assert.match(server,/confirm-item/);assert.match(ui,/Konfirmasi Not Deal/);assert.match(ui,/confirm-item/) });
