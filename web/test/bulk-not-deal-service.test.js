@@ -25,7 +25,7 @@ test('preview menyimpan snapshot authoritative eligible menurut cutoff dan melar
 test('maxAgeDays membatasi batas bawah dan preview maksimum 100',async()=>{
  const x=fixture({prospects:[{id:'old',status:'PROSPECT',createdAt:'2026-06-01T00:00:00Z'},{id:'ok',status:'HOT_PROSPECT',createdAt:'2026-07-20T00:00:00Z'}]});
  const p=await x.service.preview('s1',{cutoffDate:'2026-08-01T00:00:00Z',maxAgeDays:30},'bulk-age-01');assert.equal(p.total,1);
- const y=fixture({prospects:Array.from({length:101},(_,i)=>({id:`p${i}`,status:'MEDIUM',createdAt:'2026-07-01T00:00:00Z'}))});await assert.rejects(()=>y.service.preview('s1',{cutoffDate:'2026-08-01T00:00:00Z'},'bulk-max-01'),e=>e.code==='TOO_MANY_ITEMS');
+ const y=fixture({prospects:Array.from({length:101},(_,i)=>({id:`p${i}`,status:'MEDIUM',createdAt:'2026-07-01T00:00:00Z'}))});const batch=await y.service.preview('s1',{cutoffDate:'2026-08-01T00:00:00Z'},'bulk-max-01');assert.equal(batch.total,100);assert.equal(y.calls.length,0);assert.equal(y.db.prepare('SELECT COUNT(*) n FROM bulk_not_deal_items WHERE operation_id=?').get(batch.id).n,100);
 });
 
 test('confirm claim atomik, re-read, revalidasi user/token, satu POST per item dengan alasan portal',async()=>{

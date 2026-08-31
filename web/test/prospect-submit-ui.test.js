@@ -35,9 +35,11 @@ test('Bulk Input dan Bulk Not Deal berada pada menu/view terpisah', () => {
   assert.match(source, /bulkInput:'Bulk Input Prospek'/);assert.match(source, /bulkNotDeal:'Bulk Not Deal'/);
 });
 
-test('Bulk Not Deal menjelaskan safety limit lebih dari 100', () => {
-  assert.match(source, /TOO_MANY_ITEMS/);
-  assert.match(source, /Ditemukan lebih dari 100 prospek/);
+test('Bulk Not Deal menjelaskan batch maksimum 100 dan preview berikutnya', () => {
+  const html=fs.readFileSync(path.join(__dirname,'../public/index.html'),'utf8');
+  assert.match(html, /maksimal 100 prospek eligible/);
+  assert.match(source, /Batch ini berisi/);
+  assert.match(source, /preview kembali untuk batch berikutnya/);
 });
 
 test('koneksi ASSIST expired membuka kembali form login', () => {
