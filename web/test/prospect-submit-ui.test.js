@@ -35,6 +35,14 @@ test('Bulk Input dan Bulk Not Deal berada pada menu/view terpisah', () => {
   assert.match(source, /bulkInput:'Bulk Input Prospek'/);assert.match(source, /bulkNotDeal:'Bulk Not Deal'/);
 });
 
+test('Bulk Not Deal preview menampilkan nomor, nama, dan status melalui textContent', () => {
+  const html=fs.readFileSync(path.join(__dirname,'../public/index.html'),'utf8');
+  assert.match(html, /id="bulkPreviewRows"/);
+  assert.match(source, /bulkPreviewRows/);
+  assert.match(source, /x\.name/);
+  assert.match(source, /textContent/);
+});
+
 test('Bulk Not Deal menjelaskan batch maksimum 100 dan preview berikutnya', () => {
   const html=fs.readFileSync(path.join(__dirname,'../public/index.html'),'utf8');
   assert.match(html, /maksimal 100 prospek eligible/);

@@ -1065,7 +1065,7 @@ bot.on('callback_query', async (q) => {
   const msgId = q.message.message_id;
   const data = q.data;
   const c = convGet(chatId) || {};
-  await bot.answerCallbackQuery(q.id);
+  await bot.answerCallbackQuery(q.id).catch(e => console.log('answerCallbackQuery ignored:', e.message));
 
   // ── ACCOUNTS MENU (list all) ─────────────────────────────────────────────────
   if (data === 'accounts:menu') {
@@ -1802,8 +1802,6 @@ bot.on('callback_query', async (q) => {
 
     // Save allNames to session so execute can reuse for result report
     convSet(chatId, { ...s, step: 'notdeal_confirm', _ndNames: allNames, _ndCounts: counts, _ndTotal: totalCount });
-
-    convSet(chatId, { ...s, step: 'notdeal_confirm' });
     return editMsg(chatId, msgId, preview, {
       reply_markup: {
         inline_keyboard: [

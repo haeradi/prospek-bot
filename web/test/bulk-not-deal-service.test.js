@@ -7,7 +7,7 @@ const ELIGIBLE_TEST=new Set(['PROSPECT','LOW','MEDIUM','HOT','HOT_PROSPECT']);
 function fixture({prospects,update,tokenFor,delayMs=async()=>{},now='2026-08-29T00:00:00.000Z'}={}){
  const db=new DatabaseSync(':memory:');db.exec('CREATE TABLE users(id TEXT PRIMARY KEY,role TEXT,status TEXT);');
  db.prepare('INSERT INTO users VALUES(?,?,?)').run('s1','SALES','ACTIVE');db.prepare('INSERT INTO users VALUES(?,?,?)').run('s2','SALES','ACTIVE');db.prepare('INSERT INTO users VALUES(?,?,?)').run('admin','ADMIN','ACTIVE');
- let rows=prospects||[{id:'p1',status:'HOT',createdAt:'2026-07-01T00:00:00Z'},{id:'p2',status:'DEAL',createdAt:'2026-07-01T00:00:00Z'},{id:'p3',status:'LOW',createdAt:'2026-08-20T00:00:00Z'}],calls=[];
+ let rows=prospects||[{id:'p1',prospectNumber:'H704-PRS-1',name:'Budi Santoso',status:'HOT',createdAt:'2026-07-01T00:00:00Z'},{id:'p2',prospectNumber:'H704-PRS-2',name:'Siti Aminah',status:'DEAL',createdAt:'2026-07-01T00:00:00Z'},{id:'p3',prospectNumber:'H704-PRS-3',name:'Andi Wijaya',status:'LOW',createdAt:'2026-08-20T00:00:00Z'}],calls=[];
  const readCalls=[];const readClient={listProspects:async()=>{throw new Error('listProspects must never be called')},listProspectsForNotDeal:async(_t,opts)=>{readCalls.push(['list',opts]);const cutoff=Date.parse(opts.cutoffDate),lower=opts.maxAgeDays===undefined?-Infinity:cutoff-opts.maxAgeDays*86400000;return rows.filter(x=>ELIGIBLE_TEST.has(x.status)&&Date.parse(x.createdAt)<=cutoff&&Date.parse(x.createdAt)>=lower).slice(0,opts.maxItems)},findProspectById:async(_t,id,opts)=>{readCalls.push(['find',id,opts]);return rows.find(x=>String(x.id)===id)||null}};
  const service=installBulkNotDealService({db,tokenFor:tokenFor|| (id=>`token-${id}`),readClient,mutationClient:{updateProspectStatus:update|| (async(t,p)=>{calls.push({t,p});return{id:p.prospectId,status:'LOST'}})},delayMs,now:()=>now});
  return{db,service,calls,readCalls,setRows:x=>rows=x};
@@ -15,7 +15,7 @@ function fixture({prospects,update,tokenFor,delayMs=async()=>{},now='2026-08-29T
 
 test('preview menyimpan snapshot authoritative eligible menurut cutoff dan melarang IDs client',async()=>{
  const x=fixture();const a=await x.service.preview('s1',{cutoffDate:'2026-08-01T00:00:00Z'},'bulk-key-001');
- assert.equal(a.status,'PREVIEW');assert.equal(a.total,1);assert.deepEqual(x.db.prepare('SELECT target_id,from_status FROM bulk_not_deal_items').all().map(r=>({...r})),[{target_id:'p1',from_status:'HOT'}]);assert.equal(x.calls.length,0);
+ assert.equal(a.status,'PREVIEW');assert.equal(a.total,1);assert.deepEqual(a.items,[{prospectNumber:'H704-PRS-1',name:'Budi Santoso',fromStatus:'HOT',status:'PENDING'}]);assert.deepEqual(x.db.prepare('SELECT target_id,from_status FROM bulk_not_deal_items').all().map(r=>({...r})),[{target_id:'p1',from_status:'HOT'}]);assert.equal(x.calls.length,0);
  const same=await x.service.preview('s1',{cutoffDate:'2026-08-01T00:00:00Z'},'bulk-key-001');assert.equal(same.id,a.id);
  await assert.rejects(()=>x.service.preview('s1',{cutoffDate:'2026-08-02T00:00:00Z'},'bulk-key-001'),e=>e.code==='IDEMPOTENCY_CONFLICT');
  await assert.rejects(()=>x.service.preview('s1',{cutoffDate:'2026-08-01T00:00:00Z',ids:['p2']},'bulk-key-002'),e=>e.code==='TARGET_IDS_FORBIDDEN');
