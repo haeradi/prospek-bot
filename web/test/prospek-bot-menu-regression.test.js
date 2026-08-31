@@ -18,6 +18,11 @@ test('read-only STAR query retry body kosong tetapi mutation tidak diulang',()=>
  assert.match(source, /STAR_EMPTY_RESPONSE/);
  assert.match(source, /const first = Math\.min\(25, remaining\);/);
 });
+test('error STAR 401 ditampilkan aman tanpa membuat bot crash',()=>{
+ assert.match(source, /STAR_AUTH_EXPIRED/);
+ assert.match(source, /parse_mode: undefined/);
+ assert.match(source, /catch \{ return null; \}/);
+});
 test('callback Telegram kedaluwarsa tidak menjatuhkan bot',()=>{
  assert.match(source, /answerCallbackQuery\(q\.id\)\.catch/);
 });

@@ -133,6 +133,8 @@ const callStar = (query, vars) => {
       if (!json.data) throw new Error('STAR_RESPONSE_NO_DATA');
       return json.data;
     } catch (e) {
+      const transportText = `${e?.stderr || ''} ${e?.message || ''}`;
+      if (/returned error:\s*401|HTTP[^\n]*401/i.test(transportText)) throw new Error('STAR_AUTH_EXPIRED');
       lastError = e;
       // Mutation tidak pernah diulang: hasil remote dapat ambigu setelah request dimulai.
       if (isMutation || attempt === attempts || !['STAR_EMPTY_RESPONSE','STAR_INVALID_JSON_RESPONSE'].includes(e.message)) throw e;
@@ -532,7 +534,10 @@ const notdealStatusKeyboard = () => ({
 const promptMsg = (chatId, text, opts) => bot.sendMessage(chatId, text, { parse_mode: 'Markdown', ...opts });
 const editMsg = async (chatId, msgId, text, opts) => {
   try { await bot.editMessageText(text, { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown', ...opts }); }
-  catch { await bot.sendMessage(chatId, text, { parse_mode: 'Markdown', ...opts }); }
+  catch {
+    try { return await bot.sendMessage(chatId, text, { ...opts, parse_mode: undefined }); }
+    catch { return null; }
+  }
 };
 
 // ====== FF/EXCEL PARSER ======
@@ -1774,7 +1779,10 @@ bot.on('callback_query', async (q) => {
         if (allItems.length >= NOTDEAL_MAX_ITEMS) break;
       }
     } catch (e) {
-      return editMsg(chatId, msgId, `❌ Gagal fetch prospects: ${e.message}`, backBtn('notdeal:menu'));
+      const message = e.message === 'STAR_AUTH_EXPIRED'
+        ? '❌ JWT STAR kedaluwarsa. Silakan relogin akun, lalu coba Bulk Not Deal kembali.'
+        : `❌ Gagal mengambil data prospek: ${e.message}`;
+      return editMsg(chatId, msgId, message, backBtn('notdeal:menu'));
     }
     const totalCount = allItems.length;
 
