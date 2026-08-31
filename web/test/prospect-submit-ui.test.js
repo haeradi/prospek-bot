@@ -28,6 +28,13 @@ test('STAR status copy warns against blind create retry and renders remote numbe
   assert.doesNotMatch(source, /innerHTML\s*=\s*`[^`]*\$\{/);
 });
 
+test('Bulk Input dan Bulk Not Deal berada pada menu/view terpisah', () => {
+  const html=fs.readFileSync(path.join(__dirname,'../public/index.html'),'utf8');
+  assert.match(html, /data-view="bulkInput"/);assert.match(html, /id="bulkInputView"/);
+  assert.match(html, /data-view="bulkNotDeal"/);assert.match(html, /id="bulkNotDealView"/);
+  assert.match(source, /bulkInput:'Bulk Input Prospek'/);assert.match(source, /bulkNotDeal:'Bulk Not Deal'/);
+});
+
 test('Bulk Not Deal menjelaskan safety limit lebih dari 100', () => {
   assert.match(source, /TOO_MANY_ITEMS/);
   assert.match(source, /Ditemukan lebih dari 100 prospek/);
