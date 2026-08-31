@@ -492,7 +492,7 @@ const confirmBtn = () => ({ reply_markup: { inline_keyboard: [[{ text: '✅ Kiri
 // `description` di mutation ensureCreateFollowUpProspectFromCustomers = String
 // (bukan UUID) — kirim display string persis.
 const NOTDEAL_REASON = 'Ada keperluan lain';
-const NOTDEAL_REASON_ID = 'b7b0c814-ef70-4068-b26f-abf73b03ec0b';
+const NOTDEAL_REASON_ID = 'LAINNYA';
 const REASONS_NOT_DEAL = [
   'TIDAK_BERMINAT', 'HARGA_MAHAL', 'SUDAH_PUNYA', 'DOWN_PAYMENT_MAHAL',
   'JARAK_TEMPAT', 'RESPON_LAMBAT', 'TIDAK_RESPON', 'BANTUAN_PIMPINAN',

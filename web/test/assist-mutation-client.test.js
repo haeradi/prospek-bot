@@ -11,7 +11,7 @@ test('update status mengirim kontrak STAR yang tepat dan memproyeksikan hasil',a
 test('LOST Ada keperluan lain mengirim UUID reason authoritative',async()=>{
  const calls=[],client=createAssistMutationClient({transport:async x=>{calls.push(x);return{data:{ensureUpdateCustomerProspectStatusFromCustomers:{id:'p1',prospectStatus:'LOST'}}}}});
  await client.updateProspectStatus('secret-token',{prospectId:'p1',toStatus:'LOST',reason:'Ada keperluan lain'});
- assert.equal(calls[0].variables.data.reasonNotDeal,'b7b0c814-ef70-4068-b26f-abf73b03ec0b');
+ assert.equal(calls[0].variables.data.reasonNotDeal,'LAINNYA');
 });
 
 test('create prospek mengirim kontrak STAR authoritative dan memproyeksikan hasil',async()=>{
