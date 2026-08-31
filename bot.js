@@ -3059,5 +3059,6 @@ function checkEom() {
 }
 
 // ====== START ======
-checkEom();
+// EOM mass mutation tidak boleh berjalan otomatis saat restart.
+// Bulk Not Deal wajib melalui menu, preview, dan konfirmasi eksplisit.
 console.log('🤖 Prospek Bot ready — @Rd_prospek_bot');
