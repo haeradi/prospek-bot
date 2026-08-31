@@ -28,6 +28,11 @@ test('STAR status copy warns against blind create retry and renders remote numbe
   assert.doesNotMatch(source, /innerHTML\s*=\s*`[^`]*\$\{/);
 });
 
+test('Bulk Not Deal menjelaskan safety limit lebih dari 100', () => {
+  assert.match(source, /TOO_MANY_ITEMS/);
+  assert.match(source, /Ditemukan lebih dari 100 prospek/);
+});
+
 test('koneksi ASSIST expired membuka kembali form login', () => {
   assert.match(source, /REAUTH_REQUIRED/);
   assert.match(source, /form\.hidden=!reauth/);
