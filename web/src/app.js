@@ -34,7 +34,7 @@ function createApp(opts={}){const parityMutationEnabled=opts.parityMutationEnabl
  const assistFollowupClient=opts.assistFollowupClient||createAssistFollowupClient();
  const submitService=installProspectSubmitService({db,master,tokenFor:assistTokenFor,readClient:assistReadClient,regionClient:assistRegionClient,mutationClient:assistMutationClient,followupClient:assistFollowupClient});
  const followupService=installFollowupOperationService({db,tokenFor:assistTokenFor,readClient:assistReadClient,followupClient:assistFollowupClient});
- const batchService=installBatchImportService({db,regionClient:assistRegionClient,motorClient:assistMotorClient,tokenFor:assistTokenFor});
+ const batchService=installBatchImportService({db,regionClient:assistRegionClient,motorClient:assistMotorClient,localRegionMaster:master,tokenFor:assistTokenFor});
  const bulkNotDealService=installBulkNotDealService({db,tokenFor:assistTokenFor,readClient:assistReadClient,mutationClient:assistMutationClient});
  const submitAllService=installProspectSubmitAllService({db,submitService,delayMs:opts.submitAllDelayMs,random:opts.submitAllRandom});
  const deleteExcelDraftsService=installProspectDeleteExcelDraftsService({db,audit});
