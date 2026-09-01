@@ -60,6 +60,8 @@ test('semua kesalahan format Excel menampilkan notifikasi template yang jelas', 
   assert.match(source, /Isi Excel tidak sesuai format template/);
   assert.match(source, /Baris \$\{first\.row\}/);
   assert.match(source, /REQUIRED_FOR_MEDIUM_HOT/);
+  assert.match(source, /BATCH_REGION_UNKNOWN/);
+  assert.match(source, /tidak ditemukan pada data ASSIST/);
   assert.match(source, /NIK_16_DIGITS/);
   assert.match(source, /baris \$\{loc\.row\}, kolom \$\{loc\.column\}/);
 });
