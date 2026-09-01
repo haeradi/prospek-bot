@@ -1,0 +1,5 @@
+'use strict';
+const test=require('node:test'),assert=require('node:assert/strict');
+const {createAssistMotorClient}=require('../src/assist-motor-client');
+test('reads authoritative motor code and name from ASSIST inventory',async()=>{const calls=[],c=createAssistMotorClient({transport:async x=>(calls.push(x),{data:{getAllUnitFromInventory:[{id:'a1fa5044-9840-ed11-a9b8-8038fbe10c2f',code:'LR1A',commercialName:'LR1A-PCX160 CBS PLUS'}]}})}),rows=await c.list('token','pcx');assert.deepEqual(rows,[{id:'a1fa5044-9840-ed11-a9b8-8038fbe10c2f',code:'LR1A',name:'LR1A-PCX160 CBS PLUS'}]);assert.match(calls[0].query,/getAllUnitFromInventory\(search:\$search,series:\[\]\)/)});
+test('resolve code is exact, case insensitive, and fails closed when unknown or duplicated',async()=>{const c=createAssistMotorClient({transport:async()=>({data:{getAllUnitFromInventory:[{id:'a1fa5044-9840-ed11-a9b8-8038fbe10c2f',code:'LR1A',commercialName:'PCX'}]}})});assert.equal((await c.resolve('t','lr1a')).code,'LR1A');await assert.rejects(()=>c.resolve('t','XX'),{code:'MOTOR_CODE_INVALID'})});
