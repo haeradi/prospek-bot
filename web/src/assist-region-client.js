@@ -1,5 +1,5 @@
 'use strict';
-const ENDPOINT='https://api.star.astra.co.id/graphql/',ORIGIN='https://assist.star.astra.co.id',UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const ENDPOINT='https://api.star.astra.co.id/graphql/',ORIGIN='https://assist.star.astra.co.id',UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const failure=(code,status=502)=>Object.assign(new Error(code),{code,status});
 const queries={province:'query PortalProvinces{getAllProvinceFromDistrict(order:{provinceCode:ASC}){id provinceName provinceCode}}',district:'query PortalDistricts($parentId:UUID!){getAllDistrictFromDistrict(where:{provinceId:{eq:$parentId}},order:{districtCode:ASC}){id districtName districtCode}}',subDistrict:'query PortalSubDistricts($parentId:UUID!){getAllSubDistrictFromDistrict(where:{districtId:{eq:$parentId}},order:{subDistrictCode:ASC}){id subDistrictName subDistrictCode}}',village:'query PortalVillages($parentId:UUID!){getAllVillageFromDistrict(where:{subDistrictId:{eq:$parentId}},order:{villageCode:ASC}){id villageName villageCode postalCode}}'};
 const roots={province:'getAllProvinceFromDistrict',district:'getAllDistrictFromDistrict',subDistrict:'getAllSubDistrictFromDistrict',village:'getAllVillageFromDistrict'};
