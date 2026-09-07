@@ -65,3 +65,5 @@ test('semua kesalahan format Excel menampilkan notifikasi template yang jelas', 
   assert.match(source, /NIK_16_DIGITS/);
   assert.match(source, /baris \$\{loc\.row\}, kolom \$\{loc\.column\}/);
 });
+
+test('HTML tidak merender tag penutup rusak sebagai teks',()=>{const html=fs.readFileSync(path.join(__dirname,'../public/index.html'),'utf8');assert.doesNotMatch(html,/(^|\n)\/div>/)});
