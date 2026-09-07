@@ -54,3 +54,6 @@ button:disabled{pointer-events:none;cursor:not-allowed;opacity:.55;filter:graysc
 
 .detail-page-heading{display:flex;align-items:center;gap:14px;margin-bottom:20px}.detail-page-heading h1,.detail-page-heading p{margin:0}.detail-back{width:46px;height:46px;min-width:46px;padding:0;border:1px solid #e2e5e9;border-radius:50%;background:#fff;color:#20252b;font-size:25px;line-height:1;box-shadow:0 4px 14px rgba(31,35,40,.08)}.detail-back:hover,.detail-back:focus-visible{border-color:#d71920;color:#d71920;background:#fff}#assistDetailView{max-width:820px;margin:0 auto}#assistDetailView #ownProspectDetail{margin-top:0}
 @media(max-width:600px){#assistDetailView{margin:-4px -4px 0}.detail-page-heading{margin-bottom:14px}.detail-page-heading h1{font-size:24px}.detail-back{width:44px;height:44px;min-width:44px}}
+
+/* Force a usable single-column login on phones even when desktop-site viewport is active. */
+@media (hover:none) and (pointer:coarse){.auth{display:block;min-height:100dvh}.auth>aside{display:none}.auth>main{min-height:100dvh;padding:24px 18px;place-items:center}.authbox{width:min(430px,100%)}#toast{left:18px;right:18px;top:18px;max-width:none}}

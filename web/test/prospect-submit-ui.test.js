@@ -67,3 +67,5 @@ test('semua kesalahan format Excel menampilkan notifikasi template yang jelas', 
 });
 
 test('HTML tidak merender tag penutup rusak sebagai teks',()=>{const html=fs.readFileSync(path.join(__dirname,'../public/index.html'),'utf8');assert.doesNotMatch(html,/(^|\n)\/div>/)});
+
+test('login menampilkan pesan rate limit yang presisi',()=>{const js=fs.readFileSync(path.join(__dirname,'../public/app.js'),'utf8');assert.match(js,/RATE_LIMITED[^;]+Terlalu banyak percobaan/)});
