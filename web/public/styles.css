@@ -43,3 +43,11 @@ button:disabled{pointer-events:none;cursor:not-allowed;opacity:.55;filter:graysc
 
 /* Center prospect status selector */
 #assistProspectSearch .prospect-stage-tabs{margin-left:auto;margin-right:auto;align-self:center}
+
+/* Precision alignment for ASSIST search */
+#assistProspectSearch .prospect-search-row{display:grid;grid-template-columns:minmax(0,1fr) 132px;column-gap:10px;align-items:end;width:100%;margin:0}
+#assistProspectSearch .search-field{display:grid;grid-template-rows:18px 48px;gap:6px;min-width:0;margin:0}
+#assistProspectSearch .search-field>span{display:flex;align-items:center;height:18px;margin:0;line-height:18px}
+#assistProspectSearch .search-field input{display:block;box-sizing:border-box;width:100%;min-width:0;height:48px;min-height:48px;margin:0;padding-top:0;padding-bottom:0;line-height:46px}
+#assistProspectSearch .search-button{box-sizing:border-box;display:flex;align-items:center;justify-content:center;width:132px;min-width:132px;height:48px;min-height:48px;margin:0;padding:0 16px;line-height:1;border-radius:12px}
+@media(max-width:560px){#assistProspectSearch .prospect-search-row{grid-template-columns:minmax(0,1fr) 48px;column-gap:8px}#assistProspectSearch .search-button{width:48px;min-width:48px;padding:0}}
