@@ -27,3 +27,5 @@ button:disabled{pointer-events:none;cursor:not-allowed;opacity:.55;filter:graysc
 
 /* Astra red dashboard theme */
 .sales-hero{background:linear-gradient(135deg,#a90f16 0%,#d71920 62%,#b30d14 100%)}.sales-hero:after{background:#e72a31}.sales-avatar{background:#fff0f0;color:#b30d14}.sales-profile small,.sales-assignment small,.sales-connection small{color:#ffd6d8}.sales-assignment b span{color:#fff}.sales-connection{background:#8e0b11}.dashboard-report{background:#8e0b11}.report-heading .over{color:#ffc9cc}.report-link{background:#5e080c}.dashboard-stats{grid-template-columns:repeat(4,minmax(0,1fr))}.dashboard-stats article{background:#fff1f1;color:#a40d14;border:1px solid #ffcfd1}.sales-connection>span.connected{background:#70df98}@media(max-width:1050px){.dashboard-stats{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:650px){.dashboard-stats{grid-template-columns:1fr}}
+
+.report-period{margin:0 0 16px;color:#fee2e2;font-weight:700}.mobile-report-stats article span{display:block}.mobile-report-stats article b{margin:10px 0 2px}
