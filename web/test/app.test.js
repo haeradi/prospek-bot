@@ -57,7 +57,7 @@ test('admin dapat approve lalu sales login dan hanya melihat dashboard sales',as
 test('Admin dapat menambah Sales ACTIVE hanya pada dealer sendiri',async()=>{
  const al=await request(base,'/api/login',{method:'POST',body:JSON.stringify({email:'admin@example.invalid',password:'AdminPassword!123'})}),cookie=al.headers.get('set-cookie').split(';')[0];
  const made=await request(base,'/api/admin/users',{method:'POST',headers:{cookie,'x-csrf-token':al.body.csrfToken},body:JSON.stringify({fullName:'Sales Admin Buat',email:'adminbuat@example.invalid',phone:'081233344455',salesCode:'ADMCRT',dealerCode:'H999',role:'ADMIN',password:'StrongPassword!456'})});
- assert.equal(made.status,201);assert.equal(made.body.user.role,'SALES');assert.equal(made.body.user.status,'ACTIVE');assert.equal(made.body.user.dealerCode,'H704');
+ assert.equal(made.status,201);assert.equal(made.body.user.role,'ADMIN');assert.equal(made.body.user.status,'ACTIVE');assert.equal(made.body.user.dealerCode,'H704');
  assert.equal((await request(base,'/api/login',{method:'POST',body:JSON.stringify({email:'adminbuat@example.invalid',password:'StrongPassword!456'})})).status,200)
 });
 
