@@ -69,3 +69,5 @@ test('semua kesalahan format Excel menampilkan notifikasi template yang jelas', 
 test('HTML tidak merender tag penutup rusak sebagai teks',()=>{const html=fs.readFileSync(path.join(__dirname,'../public/index.html'),'utf8');assert.doesNotMatch(html,/(^|\n)\/div>/)});
 
 test('login menampilkan pesan rate limit yang presisi',()=>{const js=fs.readFileSync(path.join(__dirname,'../public/app.js'),'utf8');assert.match(js,/RATE_LIMITED[^;]+Terlalu banyak percobaan/)});
+
+test('Input Prospek menampilkan riwayat rapi, retensi 24 jam, dan tombol hapus',()=>{const html=fs.readFileSync(path.join(__dirname,'../public/index.html'),'utf8'),js=fs.readFileSync(path.join(__dirname,'../public/app.js'),'utf8');assert.match(html,/Riwayat Input Prospek/);assert.match(html,/terhapus otomatis setelah 24 jam/);assert.match(js,/Hapus riwayat/);assert.match(js,/method:'DELETE'/);assert.match(js,/confirm\(/)});
