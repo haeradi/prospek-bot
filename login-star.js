@@ -12,6 +12,7 @@ fs.mkdirSync(LOG_DIR, { recursive: true });
 
 const LOG_FILE = path.join(LOG_DIR, `login-star-${Date.now()}.log`);
 const VAULT = require('./vault-manager');
+const { PASSWORD_SELECTOR, waitForPostUsernameState } = require('./login-flow');
 const STAR_API = 'https://api.star.astra.co.id/graphql/';
 const MFA_WAIT_SECONDS = 240;
 
@@ -124,28 +125,16 @@ async function runLogin() {
   await page.click('button:has-text("Login")');
   await page.waitForTimeout(2000);
 
-  // ── Step 3: Pick account on Microsoft (if shown) ─────────────────────────
-  updateStatus('login', `⏳ Pilih akun di Microsoft...`);
-  const pickSelectors = [
-    `button[aria-label*="${account.email}"]`,
-    `div[data-test-id="${account.email}"]`,
-  ];
-  for (const sel of pickSelectors) {
-    try {
-      const loc = page.locator(sel).first();
-      if (await loc.isVisible({ timeout: 1500 })) {
-        await loc.click();
-        await page.waitForTimeout(2000);
-        break;
-      }
-    } catch {}
-  }
+  // SSO dapat langsung kembali ke dashboard, atau melewati account picker.
+  updateStatus('login', `⏳ Memeriksa status autentikasi...`);
+  const postUsernameState = await waitForPostUsernameState(page, account.email, { timeout: 30000 });
+  const directDashboard = postUsernameState === 'dashboard';
 
-  // ── Step 4: Fill password ────────────────────────────────────────────────
-  updateStatus('login', `⏳ Input password...`);
-  await page.waitForSelector('input[type="password"]', { timeout: 30000 });
-  await page.fill('input[type="password"]', account.password);
-  await page.locator('input[type="submit"], button:has-text("Sign in")').first().click();
+  if (!directDashboard) {
+    updateStatus('login', `⏳ Input password...`);
+    await page.locator(PASSWORD_SELECTOR).first().fill(account.password);
+    await page.locator('input[type="submit"], button:has-text("Sign in")').first().click();
+  }
 
   // ── Step 4b: "Verify your identity" — pilih metode Authenticator ─────────
   // Microsoft kadang menampilkan halaman pilih metode MFA. Kalau tidak diklik,
@@ -183,7 +172,7 @@ async function runLogin() {
   await page.waitForTimeout(3000);
 
   let mfaNumber = null;
-  const mfaFindDeadline = Date.now() + 30000;
+  const mfaFindDeadline = directDashboard ? Date.now() : Date.now() + 30000;
   while (Date.now() < mfaFindDeadline) {
     const txt = await page.locator('body').innerText().catch(() => '');
     // Try #idRichContext_DisplaySign (the number element)
@@ -202,7 +191,9 @@ async function runLogin() {
     await page.waitForTimeout(500);
   }
 
-  if (mfaNumber) {
+  if (directDashboard) {
+    updateStatus('login', `✅ [${accountCode}] Sesi ASSIST masih aktif — MFA tidak diperlukan.`);
+  } else if (mfaNumber) {
     updateStatus('mfa',
       `🔐 *Login [${accountCode}] — VERIFIKASI*\n\n` +
       `Buka *Microsoft Authenticator*\n` +
@@ -225,10 +216,10 @@ async function runLogin() {
   //   3. Once on ASSIST: networkidle + poll localStorage for oidc.user token
   //   DO NOT navigate to identity domain — that wipes the session token!
   const deadline = Date.now() + MFA_WAIT_SECONDS * 1000;
-  let onAssist = false;
+  let onAssist = directDashboard;
   let kmsiHandled = false;
 
-  while (Date.now() < deadline) {
+  while (!onAssist && Date.now() < deadline) {
     try { if (page.isClosed()) break; } catch { break; }
     const url = page.url() || '';
 

@@ -11,3 +11,35 @@ test-count.js
 test-login-debug.js
 *.log
 auth-state-*.json
+
+# Runtime & local data
+.bot.pid
+*.db
+*.sqlite
+*.sqlite3
+*.bak*
+data/
+
+# Credentials, sessions, and browser artifacts
+logs/
+jwt-status.json
+star-vault.json
+*auth-state*.json
+*-error.png
+
+# Local diagnostics and customer-specific experiments
+booking-*.js
+verify-*-lead.js
+fetch-leads-*.js
+bulk-fetch-leads-*.js
+check-jwt-status.js
+test-api*.js
+test-villages*.js
+extract-villages.js
+fetch-villages.js
+*TESTRIDE*.md
+testride-summary.txt
+FINAL-REPORT-TESTRIDE.md
+
+# Local backups
+bot.js.bak*
