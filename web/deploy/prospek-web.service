@@ -1,7 +1,8 @@
 [Unit]
 Description=Portal Prospek Web (companion to Telegram bot)
-After=network-online.target
+After=network-online.target team-leader-token-broker.service
 Wants=network-online.target
+Wants=team-leader-token-broker.service
 
 [Service]
 Type=simple
@@ -10,6 +11,7 @@ Group=prospekweb
 WorkingDirectory=/opt/prospek-web
 EnvironmentFile=/etc/prospek-web.env
 Environment=PORTAL_DATA_DIR=/var/lib/prospek-web/data
+Environment=TEAMLEADER_TOKEN_SOCKET=/run/prospek-web-token/broker.sock
 StateDirectory=prospek-web
 StateDirectoryMode=0700
 ExecStart=/usr/local/lib/prospek-web/node /opt/prospek-web/src/server.js

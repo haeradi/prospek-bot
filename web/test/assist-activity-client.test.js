@@ -46,7 +46,14 @@ test('deadline total <=15 detik dan external abort termasuk already-aborted',asy
 
 test('parser waktu hanya menerima ISO duration/timestamp valid dan aman',()=>{
  assert.deepEqual(parseActivityTime('PT25H'),{kind:'duration',iso:'PT25H',milliseconds:90000000,time:'25:00:00.000'});
+ assert.deepEqual(parseActivityTime('PT9H42M42.6856108S'),{kind:'duration',iso:'PT9H42M42.6856108S',milliseconds:34962686,time:'09:42:42.686'});
  assert.equal(parseActivityTime('2026-02-30T00:00:00Z'),null);assert.equal(parseActivityTime('garbage'),null);assert.equal(parseActivityTime(12),null);
+});
+
+test('menerima UUID canonical GraphQL meski variant legacy di luar RFC 4122',async()=>{
+ const legacy='11111111-1111-4111-7111-111111111111';
+ const client=createAssistActivityClient({transport:async req=>req.variables?staff([]):activities([{assignmentActivityId:'a1',activityIdForNotif:legacy,activityType:'BTL',activityName:'Legacy'}])});
+ assert.equal((await client.listActivities('token'))[0].activityId,legacy);
 });
 
 test('default transport menghentikan response stream yang melewati cap',async t=>{

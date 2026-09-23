@@ -1,0 +1,7 @@
+'use strict';
+const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
+const root=path.join(__dirname,'../public'),files=['styles.css','login.css','notification-ui.css','team-leader.css'];
+function css(name){return fs.readFileSync(path.join(root,name),'utf8')}
+function balance(source){let n=0,comment=false,quote='',escape=false;for(let i=0;i<source.length;i++){const c=source[i],pair=source.slice(i,i+2);if(comment){if(pair==='*/'){comment=false;i++}continue}if(quote){if(escape)escape=false;else if(c==='\\')escape=true;else if(c===quote)quote='';continue}if(pair==='/*'){comment=true;i++;continue}if(c==='"'||c==="'"){quote=c;continue}if(c==='{')n++;if(c==='}')n--;assert.ok(n>=0,'extra closing brace')}return n}
+test('semua stylesheet bebas marker output terpotong dan brace seimbang',()=>{for(const file of files){const source=css(file);assert.doesNotMatch(source,/\[truncated\]/,file);assert.equal(balance(source),0,`${file} brace balance`)}});
+test('CSS Team Leader terisolasi, dimuat, dan tersedia di static allowlist',()=>{const html=fs.readFileSync(path.join(root,'index.html'),'utf8'),server=fs.readFileSync(path.join(__dirname,'../src/app.js'),'utf8'),tl=css('team-leader.css');assert.match(html,/team-leader\.css\?v=/);assert.match(server,/'\/team-leader\.css'/);assert.match(tl,/@media\(max-width:720px\)/);assert.match(tl,/\.tl-kpis\{display:grid/);assert.match(tl,/\.tl-team-wrap\{overflow-x:auto/)})

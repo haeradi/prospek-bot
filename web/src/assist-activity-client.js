@@ -1,15 +1,15 @@
 'use strict';
 
 const ENDPOINT='https://api.star.astra.co.id/graphql/';
-const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ACTIVITIES=`query ActivityRead { getAttendanceValidationFromActivity { assignmentActivityId activityIdForNotif activityType activityName } }`;
 const STAFF=`query ActivityStaff($aid: UUID!) { getListStaffDetailActivityFromActivity(activityId: $aid) { staffId name lastClockIn lastClockOut } }`;
 function failure(code,status=502){return Object.assign(new Error(code),{code,status})}
 function cleanString(value,max=500){return typeof value==='string'&&value.length<=max?value.trim():null}
 function parseActivityTime(value){
  if(typeof value!=='string'||!value)return null;
- const d=value.match(/^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d{1,3})?)S)?$/);
- if(d&&(d[1]||d[2]||d[3])){const h=Number(d[1]||0),m=Number(d[2]||0),s=Number(d[3]||0);if(m>59||s>=60||!Number.isSafeInteger(h)||h>100000)return null;const milliseconds=(h*3600+m*60+s)*1000;if(!Number.isSafeInteger(milliseconds))return null;const whole=Math.floor(s),ms=Math.round((s-whole)*1000);return {kind:'duration',iso:value,milliseconds,time:`${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(whole).padStart(2,'0')}.${String(ms).padStart(3,'0')}`}}
+ const d=value.match(/^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d{1,9})?)S)?$/);
+ if(d&&(d[1]||d[2]||d[3])){const h=Number(d[1]||0),m=Number(d[2]||0),s=Number(d[3]||0);if(m>59||s>=60||!Number.isSafeInteger(h)||h>100000)return null;const milliseconds=Math.round((h*3600+m*60+s)*1000);if(!Number.isSafeInteger(milliseconds))return null;const whole=Math.floor(s),ms=Math.round((s-whole)*1000);return {kind:'duration',iso:value,milliseconds,time:`${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(whole).padStart(2,'0')}.${String(ms).padStart(3,'0')}`}}
  if(!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/.test(value))return null;
  const epochMs=Date.parse(value);if(!Number.isSafeInteger(epochMs))return null;const date=new Date(epochMs),parts=value.slice(0,10).split('-').map(Number);if(value.endsWith('Z')&&(date.getUTCFullYear()!==parts[0]||date.getUTCMonth()+1!==parts[1]||date.getUTCDate()!==parts[2]))return null;return {kind:'timestamp',iso:date.toISOString(),epochMs};
 }
