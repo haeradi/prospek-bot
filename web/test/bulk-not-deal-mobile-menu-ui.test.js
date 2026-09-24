@@ -17,3 +17,27 @@ test('halaman Bulk Not Deal memakai heading dan panel operasional responsif sepe
   assert.match(css,/\.bulk-not-deal-card/);
   assert.match(css,/@media\(max-width:720px\)[\s\S]*#bulkNotDealView \.bulk-not-deal-heading/);
 });
+
+test('preview Bulk Not Deal mengikuti workspace ringkas Bulk Excel',()=>{
+  for(const id of ['bulkEligibleTotal','bulkVisibleTotal','bulkStatusLabel','bulkPreviewListHead'])assert.match(html,new RegExp(`id="${id}"`));
+  assert.match(html,/class="bulk-not-deal-summary"/);
+  assert.match(html,/class="bulk-not-deal-list-head"/);
+  assert.match(css,/#bulkPreviewRows\{display:block/);
+  assert.match(css,/\.bulk-prospect-card\{display:grid!important;grid-template-columns:/);
+  assert.match(css,/@media\(max-width:720px\)[\s\S]*\.bulk-prospect-card\{grid-template-columns:minmax\(0,1fr\) 104px/);
+});
+
+test('ringkasan preview diperbarui dari operation server tanpa mengubah safety gate',()=>{
+  const js=fs.readFileSync(path.join(__dirname,'../public/app.js'),'utf8');
+  assert.match(js,/bulkEligibleTotal[^;]*textContent=String\(b\.operation\.total\|\|0\)/);
+  assert.match(js,/bulkVisibleTotal[^;]*textContent=String\(\(b\.operation\.items\|\|\[\]\)\.length\)/);
+  assert.match(js,/bulkStatusLabel[^;]*textContent=b\.operation\.total\?'Siap ditinjau':'Kosong'/);
+  assert.match(js,/PortalUI\.confirm\(\{type:'danger',title:'Bulk Not Deal'/);
+});
+
+
+test('ringkasan Bulk Not Deal direset saat preview baru dan gagal',()=>{
+  const js=fs.readFileSync(path.join(__dirname,'../public/app.js'),'utf8');
+  assert.match(js,/bulkEligibleTotal'\)\.textContent='0'.*bulkVisibleTotal'\)\.textContent='0'.*bulkStatusLabel'\)\.textContent='Memuat'/s);
+  assert.match(js,/catch\([a-z]\)\{bulkOperation=null;.*bulkStatusLabel'\)\.textContent='Gagal'/s);
+});
