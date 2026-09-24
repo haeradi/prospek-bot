@@ -26,8 +26,8 @@ test('CSS mobile memakai KPI 2x2, safe area, dan terisolasi di breakpoint',()=>{
 
 test('PWA memuat versi aset mobile terbaru',()=>{
   const html=read('index.html'),sw=read('sw.js');
-  assert.match(html,/styles\.css\?v=51/);
-  assert.match(html,/app\.js\?v=67/);
-  assert.match(sw,/portal-tools-shell-v52/);
-  assert.match(sw,/styles\.css\?v=51/);
+  assert.match(html,/styles\.css\?v=52/);
+  assert.match(html,/app\.js\?v=68/);
+  assert.match(sw,/portal-tools-shell-v53/);
+  assert.match(sw,/styles\.css\?v=52/);
 });
