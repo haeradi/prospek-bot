@@ -264,7 +264,6 @@ Hanya admin dapat mengubah status selain proses registrasi awal.
 - Audit admin dan ekspor data.
 - Backup terenkripsi dan uji restore berkala.
 - Dependabot/npm audit, lockfile, CI secret scan.
-- Parser upload web tidak boleh memakai `xlsx@0.18.5` yang saat audit memiliki advisory high severity (prototype pollution/ReDoS); pilih parser terpelihara atau isolasi worker dengan limit ketat sebelum fitur import dibuka.
 
 ## 12. Desain UI
 

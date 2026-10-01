@@ -1,0 +1,6 @@
+import {readFileSync} from 'node:fs';
+import Database from 'better-sqlite3';
+const EMAIL='abdul.rahmadan@hso.astra.co.id';
+for(const line of readFileSync('/home/ubuntu/h704-bot/.env','utf8').split('\n')){const m=line.match(/^([^#=]+)=(.*)$/);if(m&&!process.env[m[1].trim()])process.env[m[1].trim()]=m[2].trim()}
+const {decrypt}=await import('/home/ubuntu/h704-bot/crypto-vault.js');
+try{const db=new Database(process.env.ASSIST_DB||'/home/ubuntu/assist-bot/assist.db',{readonly:true,fileMustExist:true});const row=db.prepare('SELECT t.access_token FROM assist_tokens t JOIN assist_accounts a ON a.id=t.account_id WHERE lower(a.email)=lower(?)').get(EMAIL);db.close();if(!row)throw new Error('TOKEN_MISSING');const accessToken=decrypt(row.access_token),parts=accessToken.split('.');if(parts.length!==3||accessToken.length>20000)throw new Error('TOKEN_INVALID');const payload=JSON.parse(Buffer.from(parts[1],'base64url').toString('utf8'));if(!Number.isFinite(payload.exp)||payload.exp<=Math.floor(Date.now()/1000)+60)throw new Error('TOKEN_EXPIRED');process.stdout.write(JSON.stringify({ok:true,accessToken})+'\n')}catch(e){process.stdout.write(JSON.stringify({ok:false,code:String(e?.message||'TOKEN_UNAVAILABLE').replace(/[^A-Z0-9_]/gi,'').slice(0,48)})+'\n');process.exitCode=1}

@@ -1,0 +1,3 @@
+'use strict';
+const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
+test('Bulk Not Deal memilih bulan kalender dan selalu memberi status preview',()=>{const html=fs.readFileSync(path.join(__dirname,'../public/index.html'),'utf8'),js=fs.readFileSync(path.join(__dirname,'../public/app.js'),'utf8');assert.match(html,/id="bulkMonth" type="month"/);assert.match(js,/Date\.UTC\(year,monthNumber,0/);assert.match(js,/maxAgeDays:days/);assert.match(js,/Mengambil prospek H704 bulan/);assert.match(js,/Tidak ada prospek H704 eligible/);assert.match(js,/Preview gagal:/)});

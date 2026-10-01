@@ -1,0 +1,1 @@
+'use strict';const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');test('kartu dan dialog menampilkan alasan Not Deal persis',()=>{const js=fs.readFileSync(path.join(__dirname,'../public/app.js'),'utf8');assert.ok((js.match(/Ada keperluan lain/g)||[]).length>=2);assert.match(js,/Alasan: Ada keperluan lain/)});

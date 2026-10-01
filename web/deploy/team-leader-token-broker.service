@@ -1,0 +1,21 @@
+[Unit]
+Description=Team Leader ASSIST token broker
+After=network-online.target
+Before=prospek-web.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+Environment=TEAMLEADER_TOKEN_SOCKET=/run/prospek-web-token/broker.sock
+RuntimeDirectory=prospek-web-token
+RuntimeDirectoryMode=0750
+ExecStart=/usr/local/lib/prospek-web/node /opt/prospek-web/deploy/team-leader-token-broker.js
+Restart=on-failure
+RestartSec=5
+TasksMax=64
+UMask=0007
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,3 @@
+'use strict';
+const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
+test('UI Leads New dan On Track menghubungkan preview-confirm-cancel follow-up',()=>{const html=fs.readFileSync(path.join(__dirname,'../public/index.html'),'utf8'),js=fs.readFileSync(path.join(__dirname,'../public/app.js'),'utf8');for(const id of ['leadFollowupActions','leadFollowupPreview','leadFollowupConfirm','leadFollowupCancel'])assert.match(html,new RegExp(`id="${id}"`));assert.match(js,/kind:'LEAD',leadType:leadFollowupType/);assert.match(js,/\/api\/assist\/followups\/preview/);assert.match(js,/\/confirm/);assert.match(js,/\/cancel/);assert.match(js,/PARITY_MUTATION_DISABLED/)});
