@@ -28,6 +28,6 @@ test('PWA memuat versi aset mobile terbaru',()=>{
   const html=read('index.html'),sw=read('sw.js');
   assert.match(html,/styles\.css\?v=52/);
   assert.match(html,/app\.js\?v=68/);
-  assert.match(sw,/portal-tools-shell-v53/);
+  assert.match(sw,/portal-tools-shell-[^']*.*v54/);
   assert.match(sw,/styles\.css\?v=52/);
 });

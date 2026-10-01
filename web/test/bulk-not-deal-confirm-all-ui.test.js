@@ -10,7 +10,7 @@ test('Bulk Not Deal exposes one bottom confirm-all button only after a nonempty 
 });
 
 test('confirm-all requires explicit professional confirmation before the existing snapshot confirm endpoint',()=>{
-  assert.match(js,/\$\('#bulkConfirm'\)\.onclick=async\(\)=>\{if\(!bulkOperation\)return;if\(!await PortalUI\.confirm\([^)]*Bulk Not Deal[^)]*\)\)return;try\{const b=await api\(`\/api\/assist\/bulk-not-deal\/\$\{bulkOperation\.id\}\/confirm`/s);
+  assert.match(js,/\$\('#bulkConfirm'\)\.onclick=async\(\)=>\{if\(!bulkOperation\)return;if\(!await PortalUI\.confirm\([\s\S]*?\)\)return;setOperationBusy\(\$\('#bulkConfirm'\),true\);showOperationProgress\('Bulk Not Deal',[\s\S]*?const b=await api\(`\/api\/assist\/bulk-not-deal\/\$\{bulkOperation\.id\}\/confirm`/);
   assert.equal((js.match(/bulk-not-deal\/\$\{bulkOperation\.id\}\/confirm`/g)||[]).length,1,'confirm-all performs exactly one mutation request');
 });
 
