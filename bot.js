@@ -32,6 +32,18 @@ function currentJwtUuid() {
   return decodeJwtUuid(jwt) || '';
 }
 
+// Periode bulan berjalan dalam zona bisnis WITA (UTC+8), dipakai Bulk Not Deal.
+// End memakai waktu saat ini agar tidak memasukkan tanggal masa depan.
+function currentWitaMonthRange(now = new Date()) {
+  const shifted = new Date(now.getTime() + 8 * 60 * 60 * 1000);
+  const year = shifted.getUTCFullYear();
+  const month = String(shifted.getUTCMonth() + 1).padStart(2, '0');
+  return {
+    gte: `${year}-${month}-01T00:00:00+08:00`,
+    lte: now.toISOString(),
+  };
+}
+
 // ====== HUMAN DELAY — zigzag random 1-5 menit seperti input manual ======
 const HUMAN_DELAY_POOL_MIN = [1, 2, 3, 5]; // base delays in minutes
 function humanDelay(minutes = null) {
@@ -90,37 +102,48 @@ const execSync = require('child_process').execSync;
 const callStar = (query, vars) => {
   const body = JSON.stringify({ query, variables: vars || {} });
   const escaped = body.replace(/'/g, "'\\''");
-  const cmd = `curl -s --max-time 30 '${STAR_API}' ` +
+  const cmd = `curl -sS --fail-with-body --max-time 30 '${STAR_API}' ` +
     `-H 'Authorization: Bearer ${jwt}' ` +
     `-H 'Content-Type: application/json; charset=utf-8' ` +
     `-H 'origin: ${ORIGIN}' ` +
     `-H 'referer: ${ORIGIN}/' ` +
-    `-H 'user-agent: Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Mobile Safari/537.36' ` +
+    `-H 'user-agent: Mozilla/5.0' ` +
     `-d '${escaped}'`;
-  // Audit: log all Star API mutations (create/update prospect, follow-up, status)
-  try {
-    if (query.includes('mutation')) {
+  const isMutation = query.includes('mutation');
+  const attempts = query.includes('mutation') ? 1 : 3;
+  if (isMutation) {
+    try {
       const name = query.match(/mutation\s+(\w+)/)?.[1] || '?';
-      const keys = Object.keys(vars?.data || {}).slice(0, 4).join(',');
-      auditLog('star_mutation', { mutation: name, fields: keys });
+      auditLog('star_mutation', { mutation: name, fields: Object.keys(vars?.data || {}).slice(0, 4).join(',') });
+    } catch {}
+  }
+  let lastError;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    let stdout = '';
+    try {
+      stdout = execSync(cmd, { encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 });
+      if (!stdout || !stdout.trim()) throw new Error('STAR_EMPTY_RESPONSE');
+      let json;
+      try { json = JSON.parse(stdout); } catch { throw new Error('STAR_INVALID_JSON_RESPONSE'); }
+      if (json.errors) {
+        const msgs = json.errors.map(e => e.message).join(', ');
+        console.error('callStar API error:', msgs, '| response:', JSON.stringify(json.errors).slice(0, 500));
+        throw new Error(msgs);
+      }
+      if (!json.data) throw new Error('STAR_RESPONSE_NO_DATA');
+      return json.data;
+    } catch (e) {
+      const transportText = `${e?.stderr || ''} ${e?.message || ''}`;
+      if (/returned error:\s*401|HTTP[^\n]*401/i.test(transportText)) throw new Error('STAR_AUTH_EXPIRED');
+      lastError = e;
+      // Mutation tidak pernah diulang: hasil remote dapat ambigu setelah request dimulai.
+      if (isMutation || attempt === attempts || !['STAR_EMPTY_RESPONSE','STAR_INVALID_JSON_RESPONSE'].includes(e.message)) throw e;
+      console.warn(`callStar read retry ${attempt}/${attempts}: ${e.message}`);
     }
-  } catch {}
-
-  let stdout;
-  try {
-    stdout = execSync(cmd, { encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 });
-  } catch (e) {
-    if (e.stdout) stdout = e.stdout; else throw e;
   }
-  const json = JSON.parse(stdout);
-  if (json.errors) {
-    const msgs = json.errors.map(e => e.message).join(', ');
-    const fullLog = JSON.stringify(json.errors).slice(0, 500);
-    console.error('callStar API error:', msgs, '| response:', fullLog);
-    throw new Error(msgs);
-  }
-  return json.data;
+  throw lastError || new Error('STAR_READ_FAILED');
 };
+
 
 // ====== WILAYAH UUID (KALIMANTAN TIMUR - PENAJAM) ======
 // ====== WILAYAH MAP ======
@@ -480,6 +503,7 @@ const confirmBtn = () => ({ reply_markup: { inline_keyboard: [[{ text: '✅ Kiri
 // `description` di mutation ensureCreateFollowUpProspectFromCustomers = String
 // (bukan UUID) — kirim display string persis.
 const NOTDEAL_REASON = 'Ada keperluan lain';
+const NOTDEAL_REASON_ID = 'Ada keperluan lain';
 const REASONS_NOT_DEAL = [
   'TIDAK_BERMINAT', 'HARGA_MAHAL', 'SUDAH_PUNYA', 'DOWN_PAYMENT_MAHAL',
   'JARAK_TEMPAT', 'RESPON_LAMBAT', 'TIDAK_RESPON', 'BANTUAN_PIMPINAN',
@@ -510,7 +534,10 @@ const notdealStatusKeyboard = () => ({
 const promptMsg = (chatId, text, opts) => bot.sendMessage(chatId, text, { parse_mode: 'Markdown', ...opts });
 const editMsg = async (chatId, msgId, text, opts) => {
   try { await bot.editMessageText(text, { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown', ...opts }); }
-  catch { await bot.sendMessage(chatId, text, { parse_mode: 'Markdown', ...opts }); }
+  catch {
+    try { return await bot.sendMessage(chatId, text, { ...opts, parse_mode: undefined }); }
+    catch { return null; }
+  }
 };
 
 // ====== FF/EXCEL PARSER ======
@@ -1052,7 +1079,7 @@ bot.on('callback_query', async (q) => {
   const msgId = q.message.message_id;
   const data = q.data;
   const c = convGet(chatId) || {};
-  await bot.answerCallbackQuery(q.id);
+  await bot.answerCallbackQuery(q.id).catch(e => console.log('answerCallbackQuery ignored:', e.message));
 
   // ── ACCOUNTS MENU (list all) ─────────────────────────────────────────────────
   if (data === 'accounts:menu') {
@@ -1717,33 +1744,47 @@ bot.on('callback_query', async (q) => {
       `Mohon tunggu sebentar, sedang menghitung jumlah prospek.`,
       {});
 
-    // Collect ALL prospect names per status (paginated, S0001-safe)
+    // Snapshot bounded: preview dan execute memakai populasi yang sama.
+    const NOTDEAL_MAX_ITEMS = 200;
     const statuses = targetStatus === 'ALL' ? ['HOT', 'MEDIUM', 'LOW'] : [targetStatus];
+    const monthRange = currentWitaMonthRange();
     const counts = {};
     const allNames = { HOT: [], MEDIUM: [], LOW: [] };
-    let totalCount = 0;
+    const allItems = [];
 
     try {
       for (const st of statuses) {
         let after = null;
         let hasMore = true;
-        while (hasMore) {
+        while (hasMore && allItems.length < NOTDEAL_MAX_ITEMS) {
+          const remaining = NOTDEAL_MAX_ITEMS - allItems.length;
+          const first = Math.min(25, remaining);
           const cursorArg = after ? `, after: "${after}"` : '';
-          const q = '{ getCustomerProspectFromCustomers(first: 10' + cursorArg + ', where: { prospectNumber: { startsWith: "H704-PRS" }, prospectStatus: { eq: ' + st + ' }, createdBy: { eq: "' + currentJwtUuid() + '" }, created: { gte: "2026-07-01T00:00:00Z", lte: "2026-07-31T23:59:59Z" } }) { nodes { id prospectNumber name prospectStatus } pageInfo { hasNextPage endCursor } } }';
+          const q = '{ getCustomerProspectFromCustomers(first: ' + first + cursorArg + ', where: { prospectNumber: { startsWith: "H704-PRS" }, prospectStatus: { eq: ' + st + ' }, createdBy: { eq: "' + currentJwtUuid() + '" }, created: { gte: "' + monthRange.gte + '", lte: "' + monthRange.lte + '" } }) { nodes { id prospectNumber name prospectStatus } pageInfo { hasNextPage endCursor } } }';
           const d = callStar(q);
-          const nodes = d.getCustomerProspectFromCustomers.nodes;
-          const pi = d.getCustomerProspectFromCustomers.pageInfo;
-          counts[st] = (counts[st] || 0) + nodes.length;
-          totalCount += nodes.length;
-          allNames[st].push(...nodes.map(n => n.name));
-          hasMore = pi.hasNextPage;
-          after = pi.endCursor;
-          if (hasMore) await new Promise(r => setTimeout(r, 2000));
+          const conn = d?.getCustomerProspectFromCustomers;
+          if (!conn || !Array.isArray(conn.nodes) || typeof conn.pageInfo?.hasNextPage !== 'boolean') throw new Error('Respons prospek tidak valid');
+          for (const n of conn.nodes) {
+            if (!n?.id || allItems.length >= NOTDEAL_MAX_ITEMS) break;
+            const item = { id: String(n.id), prospectNumber: String(n.prospectNumber || ''), name: String(n.name || 'Nama tidak tersedia'), status: st };
+            allItems.push(item);
+            counts[st] = (counts[st] || 0) + 1;
+            allNames[st].push(item.name);
+          }
+          hasMore = conn.pageInfo.hasNextPage;
+          after = conn.pageInfo.endCursor;
+          if (hasMore && (!after || typeof after !== 'string')) throw new Error('Cursor prospek tidak valid');
+          if (hasMore && allItems.length < NOTDEAL_MAX_ITEMS) await new Promise(r => setTimeout(r, 1000));
         }
+        if (allItems.length >= NOTDEAL_MAX_ITEMS) break;
       }
     } catch (e) {
-      return editMsg(chatId, msgId, `❌ Gagal fetch prospects: ${e.message}`, backBtn('notdeal:menu'));
+      const message = e.message === 'STAR_AUTH_EXPIRED'
+        ? '❌ JWT STAR kedaluwarsa. Silakan relogin akun, lalu coba Bulk Not Deal kembali.'
+        : `❌ Gagal mengambil data prospek: ${e.message}`;
+      return editMsg(chatId, msgId, message, backBtn('notdeal:menu'));
     }
+    const totalCount = allItems.length;
 
     if (totalCount === 0) {
       return editMsg(chatId, msgId,
@@ -1766,19 +1807,22 @@ bot.on('callback_query', async (q) => {
     if (targetStatus === 'ALL' || targetStatus === 'HOT') {
       if (allNames.HOT.length > 0) {
         preview += `\\n🔥 HOT (*${allNames.HOT.length}*)`;
-        for (const n of allNames.HOT) preview += `\\n  ▸ ${n}`;
+        for (const n of allNames.HOT.slice(0, 20)) preview += `\\n  ▸ ${n}`;
+        if (allNames.HOT.length > 20) preview += `\\n  ... dan ${allNames.HOT.length - 20} nama lainnya`;
       }
     }
     if (targetStatus === 'ALL' || targetStatus === 'MEDIUM') {
       if (allNames.MEDIUM.length > 0) {
         preview += `\\n🟡 MEDIUM (*${allNames.MEDIUM.length}*)`;
-        for (const n of allNames.MEDIUM) preview += `\\n  ▸ ${n}`;
+        for (const n of allNames.MEDIUM.slice(0, 20)) preview += `\\n  ▸ ${n}`;
+        if (allNames.MEDIUM.length > 20) preview += `\\n  ... dan ${allNames.MEDIUM.length - 20} nama lainnya`;
       }
     }
     if (targetStatus === 'ALL' || targetStatus === 'LOW') {
       if (allNames.LOW.length > 0) {
         preview += `\\n🟢 LOW (*${allNames.LOW.length}*)`;
-        for (const n of allNames.LOW) preview += `\\n  ▸ ${n}`;
+        for (const n of allNames.LOW.slice(0, 20)) preview += `\\n  ▸ ${n}`;
+        if (allNames.LOW.length > 20) preview += `\\n  ... dan ${allNames.LOW.length - 20} nama lainnya`;
       }
     }
     preview += `\\n─────────────────────\\n`;
@@ -1787,9 +1831,7 @@ bot.on('callback_query', async (q) => {
     preview += `Ketik *YA* untuk konfirmasi, atau *BATAL*.`;
 
     // Save allNames to session so execute can reuse for result report
-    convSet(chatId, { ...s, step: 'notdeal_confirm', _ndNames: allNames, _ndCounts: counts, _ndTotal: totalCount });
-
-    convSet(chatId, { ...s, step: 'notdeal_confirm' });
+    convSet(chatId, { ...s, step: 'notdeal_confirm', _ndItems: allItems, _ndNames: allNames, _ndCounts: counts, _ndTotal: totalCount });
     return editMsg(chatId, msgId, preview, {
       reply_markup: {
         inline_keyboard: [
@@ -1809,6 +1851,7 @@ bot.on('callback_query', async (q) => {
     // reasonNotDeal menerima plain string bebas — tidak lagi hardcode TIDAK_BERMINAT.
     const targetStatus = s.notdeal_status;
     const statuses = targetStatus === 'ALL' ? ['HOT', 'MEDIUM', 'LOW'] : [targetStatus];
+    const monthRange = currentWitaMonthRange();
     const statusLabel = targetStatus === 'ALL' ? 'HOT + MEDIUM + LOW' : targetStatus;
     const allNames = s._ndNames || { HOT: [], MEDIUM: [], LOW: [] };
     const counts = s._ndCounts || {};
@@ -1840,85 +1883,44 @@ bot.on('callback_query', async (q) => {
     const failedList = [];
     const okHot = [], okMed = [], okLow = [];
 
-    for (const st of statuses) {
-      let after = null;
-      let hasMore = true;
-
-      while (hasMore) {
-        try {
-          const cursorArg = after ? `, after: "${after}"` : '';
-          const q = '{ getCustomerProspectFromCustomers(first: 10' + cursorArg + ', where: { prospectNumber: { startsWith: "H704-PRS" }, prospectStatus: { eq: ' + st + ' }, createdBy: { eq: "' + currentJwtUuid() + '" }, created: { gte: "2026-07-01T00:00:00Z", lte: "2026-07-31T23:59:59Z" } }) { nodes { id prospectNumber name prospectStatus } pageInfo { hasNextPage endCursor } } }';
-          const d = callStar(q);
-          const nodes = d.getCustomerProspectFromCustomers.nodes;
-          const pi = d.getCustomerProspectFromCustomers.pageInfo;
-
-          if (nodes.length === 0) { hasMore = false; break; }
-
-          for (const p of nodes) {
-            if (p.prospectStatus === 'LOST' || p.prospectStatus === 'DEAL') {
-              totalSkipped++; processedCount++; continue;
-            }
-            let ok = false;
-            try {
-              // Set prospect status → LOST dengan alasan "Ada keperluan lain".
-              // reasonNotDeal = plain string bebas (bukan enum), kirim display string
-              // langsung supaya alasan Lost di CRM = "Ada keperluan lain".
-              // ⚠️ CUKUP status update saja — mutation ini SUDAH otomatis bikin entri
-              //    "Prospek Lost" di timeline. JANGAN tambah ensureCreateFollowUpProspect
-              //    karena itu bikin entri "Follow up Prospek Selanjutnya" yang meng-
-              //    aktifkan ulang prospek → tidak jadi Lost (bug dobel follow-up).
-              callStar(MUT_ND, { data: { customerProspectId: p.id, prospectStatus: 'LOST', reasonNotDeal: NOTDEAL_REASON } });
-              totalOk++;
-              ok = true;
-              if (st === 'HOT') okHot.push(p.name);
-              else if (st === 'MEDIUM') okMed.push(p.name);
-              else okLow.push(p.name);
-            } catch (e) {
-              totalFail++;
-              if (failedList.length < 5) failedList.push(`${p.name}: ${e.message}`);
-            }
-            processedCount++;
-
-            // 📊 Update progress tiap prospek (edit pesan loading yang sama)
-            if (progressMsgId) {
-              let ptxt = `⏳ *Memproses Bulk Not Deal...*\n\n`;
-              ptxt += `Progress : *${processedCount}/${ndTotal}*\n`;
-              if (totalOk > 0) ptxt += `✅ Berhasil : ${totalOk}\n`;
-              if (totalSkipped > 0) ptxt += `⏭️ Skip : ${totalSkipped}\n`;
-              if (totalFail > 0) ptxt += `❌ Gagal : ${totalFail}\n`;
-              ptxt += `\n_Mohon tunggu, jangan tekan tombol lagi._`;
-              try {
-                await bot.editMessageText(ptxt, { chat_id: chatId, message_id: progressMsgId, parse_mode: 'Markdown' });
-              } catch (e) { console.log('notdeal progress edit error:', e.message); }
-            }
-
-            // ⏳ Human delay — zigzag 5-10 detik antar prospek not deal (hanya jika sukses)
-            if (ok) {
-              await new Promise(r => setTimeout(r, 5000 + Math.floor(Math.random() * 6000)));
-              // Setiap 15 proses sukses, tambah jeda 3-4 menit
-              if (totalOk > 0 && totalOk % 15 === 0) {
-                const extraMs = 180000 + Math.floor(Math.random() * 60000); // 3-4 menit
-                if (progressMsgId) {
-                  try {
-                    await bot.editMessageText(
-                      `⏳ *Istirahat sejenak...*\n\nSudah *${totalOk}* prospek diproses.\nJeda 3-4 menit agar tidak terdeteksi spam.\n\n_Mohon tunggu..._`,
-                      { chat_id: chatId, message_id: progressMsgId, parse_mode: 'Markdown' }
-                    );
-                  } catch (e) {}
-                }
-                await new Promise(r => setTimeout(r, extraMs));
-              }
-            }
-          }
-
-          hasMore = pi.hasNextPage;
-          after = pi.endCursor;
-
-          if (!pi.hasNextPage) { hasMore = false; break; }
-        } catch (e) {
-          return bot.sendMessage(chatId, `❌ Error fetch ${st}: ${e.message}`, replyKeyboard());
+    const snapshotItems = Array.isArray(s._ndItems) ? s._ndItems.slice(0, 200) : [];
+    if (!snapshotItems.length || snapshotItems.length !== ndTotal) {
+      return bot.sendMessage(chatId, '❌ Snapshot preview tidak valid atau kedaluwarsa. Buat preview baru.', replyKeyboard());
+    }
+    for (let index = 0; index < snapshotItems.length; index++) {
+      const p = snapshotItems[index];
+      const st = p.status;
+      let ok = false;
+      try {
+        // Re-check exact ID sebelum mutation agar data DEAL/LOST yang berubah menjadi STALE/skip.
+        const q = '{ getCustomerProspectFromCustomers(first: 1, where: { id: { eq: "' + p.id + '" } }) { nodes { id prospectNumber name prospectStatus } pageInfo { hasNextPage endCursor } } }';
+        const d = callStar(q);
+        const current = d?.getCustomerProspectFromCustomers?.nodes?.[0];
+        if (!current || current.prospectStatus !== st || current.prospectStatus === 'LOST' || current.prospectStatus === 'DEAL') {
+          totalSkipped++; processedCount++;
+          continue;
         }
+        callStar(MUT_ND, { data: { customerProspectId: p.id, prospectStatus: 'LOST', reasonNotDeal: NOTDEAL_REASON_ID } });
+        totalOk++; ok = true;
+        if (st === 'HOT') okHot.push(p.name);
+        else if (st === 'MEDIUM') okMed.push(p.name);
+        else okLow.push(p.name);
+      } catch (e) {
+        totalFail++;
+        if (failedList.length < 5) failedList.push(`${p.name}: ${e.message}`);
       }
+      processedCount++;
+      if (progressMsgId) {
+        let ptxt = `⏳ *Memproses Bulk Not Deal...*\n\nProgress : *${processedCount}/${ndTotal}*\n`;
+        if (totalOk) ptxt += `✅ Berhasil : ${totalOk}\n`;
+        if (totalSkipped) ptxt += `⏭️ Skip/stale : ${totalSkipped}\n`;
+        if (totalFail) ptxt += `❌ Gagal : ${totalFail}\n`;
+        ptxt += `\n_Mohon tunggu, jangan tekan tombol lagi._`;
+        try { await bot.editMessageText(ptxt, { chat_id: chatId, message_id: progressMsgId, parse_mode: 'Markdown' }); } catch (e) { console.log('notdeal progress edit error:', e.message); }
+      }
+      // Jeda hanya antar-item, tidak setelah item terakhir.
+      if (ok && index < snapshotItems.length - 1) await new Promise(r => setTimeout(r, 5000 + Math.floor(Math.random() * 6000)));
+      if (ok && totalOk > 0 && totalOk % 15 === 0 && index < snapshotItems.length - 1) await new Promise(r => setTimeout(r, 180000 + Math.floor(Math.random() * 60000)));
     }
 
     conv.delete(chatId);
@@ -3044,5 +3046,6 @@ function checkEom() {
 }
 
 // ====== START ======
-checkEom();
+// EOM mass mutation tidak boleh berjalan otomatis saat restart.
+// Bulk Not Deal wajib melalui menu, preview, dan konfirmasi eksplisit.
 console.log('🤖 Prospek Bot ready — @Rd_prospek_bot');

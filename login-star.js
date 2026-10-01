@@ -12,7 +12,8 @@ fs.mkdirSync(LOG_DIR, { recursive: true });
 
 const LOG_FILE = path.join(LOG_DIR, `login-star-${Date.now()}.log`);
 const VAULT = require('./vault-manager');
-const { PASSWORD_SELECTOR, waitForPostUsernameState } = require('./login-flow');
+const { PASSWORD_SELECTOR, recoverBlankAssistLogin, waitForPostUsernameState } = require('./login-flow');
+const { extractCurrentStarApiJwt } = require('./star-token');
 const STAR_API = 'https://api.star.astra.co.id/graphql/';
 const MFA_WAIT_SECONDS = 240;
 
@@ -98,9 +99,19 @@ async function runLogin() {
   });
   const page = await ctx.newPage();
 
-  // Shared state between response handler and main loop
-  const tokenState = { starApiSeen: false, saved: false, mfaNotified: false };
+  // Shared state between request/response handlers and main loop
+  const tokenState = { starApiSeen: false, saved: false, mfaNotified: false, requestToken: null };
   const tokenPath = path.join(LOG_DIR, `token-${accountCode}.json`);
+
+  // Installed before navigation. Never log request headers or tokens.
+  page.on('request', request => {
+    try {
+      const requestUrl = new URL(request.url());
+      if (requestUrl.hostname !== 'api.star.astra.co.id') return;
+      const token = extractCurrentStarApiJwt(request.headers().authorization);
+      if (token) tokenState.requestToken = token;
+    } catch {}
+  });
 
   // Capture Star API requests
   page.on('response', resp => {
@@ -117,6 +128,9 @@ async function runLogin() {
   // ── Step 1: ASSIST login page ────────────────────────────────────────────
   updateStatus('login', `⏳ Buka halaman login ASSIST...`);
   await page.goto('https://assist.star.astra.co.id/login', { waitUntil: 'networkidle', timeout: 60000 });
+  const entry = await recoverBlankAssistLogin(page);
+  if (entry.state === 'upstream_unavailable') throw new Error('ASSIST login upstream unavailable');
+  if (entry.state === 'unknown') throw new Error('Halaman login ASSIST kosong setelah 2 kali pemulihan cache-bypass');
 
   // ── Step 2: Fill email in ASSIST form ───────────────────────────────────
   updateStatus('login', `⏳ Input email...`);
@@ -127,13 +141,20 @@ async function runLogin() {
 
   // SSO dapat langsung kembali ke dashboard, atau melewati account picker.
   updateStatus('login', `⏳ Memeriksa status autentikasi...`);
-  const postUsernameState = await waitForPostUsernameState(page, account.email, { timeout: 30000 });
+  let postUsernameState = await waitForPostUsernameState(page, account.email, { timeout: 30000 });
+  if (postUsernameState === 'entry_retry') {
+    await page.fill('input[placeholder*="Username"]', account.email);
+    await page.click('button:has-text("Login")');
+    postUsernameState = await waitForPostUsernameState(page, account.email, { timeout: 30000 });
+  }
   const directDashboard = postUsernameState === 'dashboard';
 
   if (!directDashboard) {
     updateStatus('login', `⏳ Input password...`);
-    await page.locator(PASSWORD_SELECTOR).first().fill(account.password);
-    await page.locator('input[type="submit"], button:has-text("Sign in")').first().click();
+    const passwordInput = page.locator(PASSWORD_SELECTOR).first();
+    await passwordInput.waitFor({ state: 'visible', timeout: 15000 });
+    await passwordInput.fill(account.password);
+    await page.locator('#idSIButton9, input[type="submit"], button:has-text("Sign in"), button:has-text("Masuk")').first().click();
   }
 
   // ── Step 4b: "Verify your identity" — pilih metode Authenticator ─────────
@@ -330,6 +351,9 @@ async function runLogin() {
     await ctx.storageState({ path: path.join(LOG_DIR, `auth-state-${accountCode}.json`) });
   } catch {}
 
+  // Request capture is a fallback only; storage is preferred for refresh data.
+  if (!access_token && tokenState.requestToken) access_token = tokenState.requestToken;
+
   await browser.close();
 
   if (!access_token) {
@@ -352,92 +376,6 @@ async function runLogin() {
   await verifyAndSaveToken(tokenPath);
 }
 
-
-async function extractTokenFromIdentity(page) {
-  // Navigate to identity domain to read its localStorage
-  try {
-    await page.goto('https://identity.star.astra.co.id/', { waitUntil: 'domcontentloaded', timeout: 10000 });
-    await page.waitForTimeout(2000);
-  } catch (e) {
-    updateStatus('login', `⚠️ Navigation to identity failed: ${e.message}`);
-  }
-
-  const storage = await page.evaluate(() => {
-    try {
-      const out = {};
-      for (let i = 0; i < localStorage.length; i++) {
-        const k = localStorage.key(i);
-        out[k] = localStorage.getItem(k);
-      }
-      return out;
-    } catch { return {}; }
-  });
-
-  for (const [k, v] of Object.entries(storage)) {
-    if (/oidc\.user.*star_api/i.test(k) && typeof v === 'string') {
-      try {
-        const parsed = JSON.parse(v);
-        if (parsed.access_token) {
-          const p = decodeJwtPayload(parsed.access_token);
-          if (p && p.exp && p.exp > Math.floor(Date.now() / 1000)) {
-            const data = {
-              access_token: parsed.access_token,
-              refresh_token: parsed.refresh_token || null,
-              id_token: parsed.id_token || null,
-              savedAt: new Date().toISOString(),
-              name: p.name,
-              sub: p.sub,
-              exp: p.exp,
-            };
-            fs.writeFileSync(tokenPath, JSON.stringify(data, null, 2));
-
-            const expStr = new Date(p.exp * 1000).toLocaleString('id-ID', {
-              timeZone: 'Asia/Makassar', dateStyle: 'medium', timeStyle: 'short'
-            });
-            updateStatus('done',
-              `✅ *Login BERHASIL [${accountCode}]*\n\n` +
-              `Nama: ${p.name}\n` +
-              `Exp : ${expStr}\n` +
-              `Source: identity.star.astra.co.id`
-            );
-            return;
-          }
-        }
-      } catch (e) {
-        updateStatus('login', `⚠️ Parse oidc token error: ${e.message}`);
-      }
-    }
-  }
-
-  // Fallback: read from storageState file
-  const ssPath = path.join(LOG_DIR, `auth-state-${accountCode}.json`);
-  if (fs.existsSync(ssPath)) {
-    try {
-      const ssData = JSON.parse(fs.readFileSync(ssPath, 'utf8'));
-      for (const origin of (ssData.origins || [])) {
-        for (const [k, v] of Object.entries(origin.localStorage || {})) {
-          if (/oidc.*star_api|star.*access/i.test(k) && typeof v === 'string' && v.length > 50) {
-            try {
-              const parsed = JSON.parse(v);
-              if (parsed.access_token) {
-                const p = decodeJwtPayload(parsed.access_token);
-                if (p && p.exp > Math.floor(Date.now() / 1000)) {
-                  const data = { access_token: parsed.access_token, refresh_token: parsed.refresh_token || null, id_token: parsed.id_token || null, savedAt: new Date().toISOString(), name: p.name, sub: p.sub, exp: p.exp };
-                  fs.writeFileSync(tokenPath, JSON.stringify(data, null, 2));
-                  const expStr = new Date(p.exp * 1000).toLocaleString('id-ID', { timeZone: 'Asia/Makassar', dateStyle: 'medium', timeStyle: 'short' });
-                  updateStatus('done', `✅ *Login BERHASIL [${accountCode}]*\n\nNama: ${p.name}\nExp : ${expStr}\nSource: storageState fallback`);
-                  return;
-                }
-              }
-            } catch {}
-          }
-        }
-      }
-    } catch (e) {}
-  }
-
-  updateStatus('error', `⚠️ *Login [${accountCode}]*\nToken tidak ditemukan di localStorage.\n\nSudah di-redirect ke ASSIST tapi JWT tidak ter-capture.\n\nCoba /relogin ${accountCode} lagi.`);
-}
 
 async function verifyAndSaveToken(tokenPath) {
   if (!fs.existsSync(tokenPath)) {
