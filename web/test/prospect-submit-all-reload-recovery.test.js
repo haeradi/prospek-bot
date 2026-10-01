@@ -13,6 +13,7 @@ test('route menyediakan lookup active owner-scoped tanpa CSRF mutation',()=>{con
 test('boot Sales memulihkan submit-all aktif, merender lalu melanjutkan polling',()=>{const js=source();assert.match(js,/\/api\/prospects\/submit-all\/active/);assert.match(js,/resumeActiveSubmitAll/);assert.match(js,/showPortal\(b\.user\).*resumeActiveSubmitAll/s);assert.match(js,/boundedPoll\(.*submit-all/s)});
 
 test('selama submit-all aktif draft single-send dan toolbar mutasi disembunyikan atau dinonaktifkan',()=>{const js=source();assert.match(js,/setSubmitAllActive/);assert.match(js,/submitAllPreviewBtn/);assert.match(js,/deleteExcelDraftsPreviewBtn/);assert.match(js,/excel-prospect-action/)});
+test('submit-all aktif tetap mengunci kontrol dan menyembunyikan daftar Excel utama',()=>{const js=source();assert.match(js,/function setSubmitAllActive\(active\)[\s\S]*?submitAllPreviewBtn'\)\.hidden=active[\s\S]*?deleteExcelDraftsPreviewBtn'\)\.hidden=active[\s\S]*?excelProspectSection'\)\.hidden=active/)});
 
 test('boot mengunci kontrol sebelum lookup active dan hanya membuka jika lookup memastikan kosong',()=>{const js=source();assert.match(js,/async function resumeActiveSubmitAll\(\)\{setSubmitAllActive\(true\);/);assert.match(js,/if\(!b\.operation\)\{setSubmitAllActive\(false\);return/);assert.doesNotMatch(js,/catch\(e\)\{setSubmitAllActive\(false\)/)});
 
